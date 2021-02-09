@@ -10,6 +10,7 @@ You can reach the maintainers of this project at:
 
 - [Slack](https://kubernetes.slack.com/messages/sig-multicluster)
 - [Mailing List](https://groups.google.com/forum/#!forum/kubernetes-sig-multicluster)
+- [SIG Multicluster](https://github.com/kubernetes/community/blob/master/sig-multicluster/README.md)
 
 ### Code of conduct
 
