@@ -29,6 +29,11 @@ export GO111MODULE=on
 .PHONY: all
 all: generate manifests controller verify
 
+# Build controller binary
+.PHONY: controller
+controller: generate fmt vet
+	go build -o bin/manager cmd/workcontroller/workcontroller.go
+
 # Run go fmt against code
 .PHONY: fmt
 fmt:
