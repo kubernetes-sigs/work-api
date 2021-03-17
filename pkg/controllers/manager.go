@@ -24,6 +24,12 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+)
+
+const (
+	workFinalizer      = "multicluster.x-k8s.io/work-cleanup"
+	specHashAnnotation = "multicluster.x-k8s.io/spec-hash"
 )
 
 // Start the controllers with the supplied config
@@ -40,12 +46,29 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 		os.Exit(1)
 	}
 
+	restMapper, err := apiutil.NewDynamicRESTMapper(spokeCfg, apiutil.WithLazyDiscovery)
+	if err != nil {
+		setupLog.Error(err, "unable to start manager")
+		os.Exit(1)
+	}
+
 	if err = (&ApplyWorkReconciler{
-		Client:             mgr.GetClient(),
-		SpokeDynamicClient: spokeDynamicClient,
-		Log:                ctrl.Log.WithName("controllers").WithName("Work"),
+		client:             mgr.GetClient(),
+		spokeDynamicClient: spokeDynamicClient,
+		restMapper:         restMapper,
+		log:                ctrl.Log.WithName("controllers").WithName("WorkApply"),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Work")
+		setupLog.Error(err, "unable to create controller", "controller", "WorkApply")
+		return err
+	}
+
+	if err = (&FinalizeWorkReconciler{
+		client:             mgr.GetClient(),
+		spokeDynamicClient: spokeDynamicClient,
+		restMapper:         restMapper,
+		log:                ctrl.Log.WithName("controllers").WithName("WorkFinalize"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WorkFinalize")
 		return err
 	}
 
