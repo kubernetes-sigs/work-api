@@ -29,11 +29,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/dynamic"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
@@ -55,7 +55,7 @@ type applyResult struct {
 // Reconcile implement the control loop logic for Work object.
 func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	work := &workv1alpha1.Work{}
-	err := r.client.Get(ctx, types.NamespacedName{Name: req.Name, Namespace: req.Namespace}, work)
+	err := r.client.Get(ctx, req.NamespacedName, work)
 	switch {
 	case errors.IsNotFound(err):
 		return ctrl.Result{}, nil
@@ -65,14 +65,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// do nothing if the finalizer is not present
 	// it ensures all maintained resources will be cleaned once work is deleted
-	found := false
-	for i := range work.Finalizers {
-		if work.Finalizers[i] == workFinalizer {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !controllerutil.ContainsFinalizer(work, workFinalizer) {
 		return ctrl.Result{}, nil
 	}
 

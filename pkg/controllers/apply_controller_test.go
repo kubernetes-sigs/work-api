@@ -26,18 +26,19 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/runtime"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilrand "k8s.io/apimachinery/pkg/util/rand"
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
 var _ = Describe("Work Controller", func() {
-	const workNamespace = "cluster"
+	var workNamespace string
 	const timeout = time.Second * 30
 	const interval = time.Second * 1
 
 	BeforeEach(func() {
+		workNamespace = "work-" + utilrand.String(5)
 		// Create namespace
 		ns := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
@@ -53,7 +54,7 @@ var _ = Describe("Work Controller", func() {
 		err := k8sClient.CoreV1().Namespaces().Delete(context.Background(), workNamespace, metav1.DeleteOptions{})
 		Expect(err).ToNot(HaveOccurred())
 	})
-	Context("Deploy a work", func() {
+	Context("Deploy manifests by work", func() {
 		It("Should have a configmap deployed correctly", func() {
 			cmName := "testcm"
 			cmNamespace := "default"

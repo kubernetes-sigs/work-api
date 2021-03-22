@@ -26,6 +26,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
@@ -51,23 +52,17 @@ func (r *FinalizeWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// cleanup finalizer and resources
 	if !work.DeletionTimestamp.IsZero() {
 		// TODO add clean resource logic
-		newFinalizers := []string{}
-		for i := range work.Finalizers {
-			if work.Finalizers[i] == workFinalizer {
-				continue
-			}
-			newFinalizers = append(newFinalizers, work.Finalizers[i])
+		if controllerutil.ContainsFinalizer(work, workFinalizer) {
+			controllerutil.RemoveFinalizer(work, workFinalizer)
 		}
-		work.Finalizers = newFinalizers
 		return ctrl.Result{}, r.client.Update(ctx, work, &client.UpdateOptions{})
 	}
 
 	// don't add finalizer to instances that already have it
-	for i := range work.Finalizers {
-		if work.Finalizers[i] == workFinalizer {
-			return ctrl.Result{}, nil
-		}
+	if controllerutil.ContainsFinalizer(work, workFinalizer) {
+		return ctrl.Result{}, nil
 	}
+
 	// if this conflicts, we'll simply try again later
 	work.Finalizers = append(work.Finalizers, workFinalizer)
 	return ctrl.Result{}, r.client.Update(ctx, work, &client.UpdateOptions{})
