@@ -30,6 +30,7 @@ type WorkSpec struct {
 // WorkloadTemplate represents the manifest workload to be deployed on spoke cluster
 type WorkloadTemplate struct {
 	// Manifests represents a list of kuberenetes resources to be deployed on the spoke cluster.
+	// The resources must be  namespace scoped resource in the same namespace, and cannot be secret.
 	// +optional
 	Manifests []Manifest `json:"manifests,omitempty"`
 }

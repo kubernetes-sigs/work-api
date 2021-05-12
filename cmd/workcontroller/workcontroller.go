@@ -46,8 +46,7 @@ func main() {
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
-	flag.StringVar(&hubkubeconfig, "kubeconfig to connect to hub", "",
-		"Paths to a kubeconfig connect to hub.")
+	flag.StringVar(&hubkubeconfig, "hub-kubeconfig", "", "Paths to a kubeconfig connect to hub.")
 	flag.Parse()
 	opts := ctrl.Options{
 		Scheme:             scheme,

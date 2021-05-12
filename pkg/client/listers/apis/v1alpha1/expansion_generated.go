@@ -18,6 +18,14 @@ limitations under the License.
 
 package v1alpha1
 
+// AppliedWorkListerExpansion allows custom methods to be added to
+// AppliedWorkLister.
+type AppliedWorkListerExpansion interface{}
+
+// AppliedWorkNamespaceListerExpansion allows custom methods to be added to
+// AppliedWorkNamespaceLister.
+type AppliedWorkNamespaceListerExpansion interface{}
+
 // WorkListerExpansion allows custom methods to be added to
 // WorkLister.
 type WorkListerExpansion interface{}

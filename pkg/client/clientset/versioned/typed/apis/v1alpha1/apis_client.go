@@ -26,12 +26,17 @@ import (
 
 type MulticlusterV1alpha1Interface interface {
 	RESTClient() rest.Interface
+	AppliedWorksGetter
 	WorksGetter
 }
 
 // MulticlusterV1alpha1Client is used to interact with features provided by the multicluster.x-k8s.io group.
 type MulticlusterV1alpha1Client struct {
 	restClient rest.Interface
+}
+
+func (c *MulticlusterV1alpha1Client) AppliedWorks(namespace string) AppliedWorkInterface {
+	return newAppliedWorks(c, namespace)
 }
 
 func (c *MulticlusterV1alpha1Client) Works(namespace string) WorkInterface {
