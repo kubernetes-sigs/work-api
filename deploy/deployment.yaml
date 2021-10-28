@@ -1,0 +1,38 @@
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: work-controller
+  labels:
+    app: work
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: work-controller
+  template:
+    metadata:
+      labels:
+        app: work-controller
+    spec:
+      serviceAccountName: work-controller-sa
+      containers:
+      - name: work-controller
+        image: work-api-controller:latest
+        imagePullPolicy: IfNotPresent
+        args:
+          - "--work-namespace=default"
+          - "--hub-kubeconfig=/spoke/hub-kubeconfig/kubeconfig"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+          privileged: false
+        volumeMounts:
+        - name: hub-kubeconfig-secret
+          mountPath: "/spoke/hub-kubeconfig"
+          readOnly: true
+      volumes:
+      - name: hub-kubeconfig-secret
+        secret:
+          secretName: hub-kubeconfig-secret

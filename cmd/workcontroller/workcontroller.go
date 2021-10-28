@@ -21,6 +21,7 @@ import (
 	"os"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -35,25 +36,29 @@ var (
 )
 
 func init() {
-	clientgoscheme.AddToScheme(scheme)
-	v1alpha1.AddToScheme(scheme)
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(v1alpha1.AddToScheme(scheme))
 }
 
 func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
 	var hubkubeconfig string
+	var workNamespace string
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
-	flag.StringVar(&hubkubeconfig, "kubeconfig to connect to hub", "",
+	flag.StringVar(&hubkubeconfig, "hub-kubeconfig", "",
 		"Paths to a kubeconfig connect to hub.")
+	flag.StringVar(&workNamespace, "work-namespace", "",
+		"Namespace to watch for work.")
 	flag.Parse()
 	opts := ctrl.Options{
 		Scheme:             scheme,
 		MetricsBindAddress: metricsAddr,
 		LeaderElection:     enableLeaderElection,
 		Port:               9443,
+		Namespace:          workNamespace,
 	}
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
