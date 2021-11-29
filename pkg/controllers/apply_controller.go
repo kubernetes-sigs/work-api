@@ -342,7 +342,7 @@ func generateWorkAppliedStatusCondition(manifestConditions []workv1alpha1.Manife
 	return metav1.Condition{
 		Type:               "Applied",
 		Status:             metav1.ConditionTrue,
-		Reason:             "AppliedWorkComplet",
+		Reason:             "AppliedWorkComplete",
 		Message:            "Apply work complete",
 		ObservedGeneration: observedGeneration,
 	}
