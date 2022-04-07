@@ -13,12 +13,13 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/setup-go@v2
       - uses: actions/checkout@v2
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v2
         with:
           # the version of golangci-lint.
-          version: v1.32.2
+          version: v1.45.2
 
           # show only new issues if it's a pull request.
           only-new-issues: false
