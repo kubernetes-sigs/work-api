@@ -42,10 +42,14 @@ func init() {
 
 func main() {
 	var metricsAddr string
+	var liveAddr string
+	var readyAddr string
 	var enableLeaderElection bool
 	var hubkubeconfig string
 	var workNamespace string
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
+	flag.StringVar(&liveAddr, "healthz", ":8080", "healthz probe")
+	flag.StringVar(&readyAddr, "readyz", ":8080", "readyz probe")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&hubkubeconfig, "hub-kubeconfig", "",
@@ -54,11 +58,13 @@ func main() {
 		"Namespace to watch for work.")
 	flag.Parse()
 	opts := ctrl.Options{
-		Scheme:             scheme,
-		MetricsBindAddress: metricsAddr,
-		LeaderElection:     enableLeaderElection,
-		Port:               9443,
-		Namespace:          workNamespace,
+		Scheme:                scheme,
+		MetricsBindAddress:    metricsAddr,
+		LivenessEndpointName:  liveAddr,
+		ReadinessEndpointName: readyAddr,
+		LeaderElection:        enableLeaderElection,
+		Port:                  9443,
+		Namespace:             workNamespace,
 	}
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 

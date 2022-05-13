@@ -79,6 +79,7 @@ verify:
 # Build docker containers
 .PHONY: docker-build
 docker-build: generate fmt vet manifests
+
 	docker build . -t ${IMG}
 
 # Push the docker image

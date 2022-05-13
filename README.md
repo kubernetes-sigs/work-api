@@ -30,15 +30,11 @@ This guide will cover:
 ### Create and setup the Hub cluster
 Open a new terminal window and run the following commands:
 ```
-cd /tmp
-git clone git@github.com:kubernetes-sigs/work-api.git
 kind delete cluster --name hub 
 kind create cluster --name hub
-kind get kubeconfig --name hub  > /tmp/hub-io-kubeconfig
-export KUBECONFIG=/tmp/hub-io-kubeconfig
-cd /tmp/work-api
+kind get kubeconfig --name hub  > hub-kubeconfig
+export KUBECONFIG=/Users/younjaekim/work-api/hub-kubeconfig
 kubectl apply -f config/crd
-cp /tmp/hub-io-kubeconfig hub-kubeconfig
 kubectl config set clusters.kind-hub.server https://hub-control-plane:6443 --kubeconfig hub-kubeconfig
 ```
 
@@ -47,16 +43,22 @@ Open another new terminal window and run the following commands:
 ```
 kind delete cluster --name cluster1
 kind create cluster --name cluster1
-kind get kubeconfig --name cluster1 > /tmp/cluster1-io-kubeconfig
-export KUBECONFIG=/tmp/cluster1-io-kubeconfig
-cd /tmp/work-api
-make docker-build
+kind get kubeconfig --name cluster1 > /Users/younjaekim/work-api/cluster1-io-kubeconfig
+export KUBECONFIG=/Users/younjaekim/work-api/cluster1-io-kubeconfig
+make generate
+make fmt
+make vet
+make manifests
+docker build . -t work-api-controller:latest
 kind load docker-image --name=cluster1 work-api-controller:latest
 kubectl apply -f deploy/component_namespace.yaml 
 kubectl delete secret hub-kubeconfig-secret -n work --ignore-not-found
 kubectl create secret generic hub-kubeconfig-secret --from-file=kubeconfig=hub-kubeconfig -n work 
-rm hub-kubeconfig
-kubectl apply -k deploy
+helm uninstall prometheus --namespace monitoring
+helm uninstall deploy-work --namespace work
+helm install prometheus prometheus-community/kube-prometheus-stack --namespace monitoring --create-namespace
+helm install deploy-work deploy-work --namespace work
+
 ```
 
 ### Deploy a Work on the Hub cluster
