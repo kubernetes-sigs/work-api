@@ -10,12 +10,13 @@
 
 ## Summary
 
-The proposed work would define a new AppliedWork internal API to represents a namespace scope workload that is applied on a managed cluster.
+The proposed work would define a new AppliedWork internal API to represents a workload that is applied on a managed cluster.
 
 ## Motivation
 
 The AppliedWork CR is to be an anchor on the managed cluster to ease garbage collection of the applied workload.
-Each applied workload resource will have a owner reference pointing at the AppliedWork CR.
+Each applied workload resource will have a resource identifier reference stored in the AppliedWork status.
+Additionally, each namespace scope applied workload resource will have a owner reference pointing at the AppliedWork CR.
 
 By leveraging this AppliedWork API:
 - Provide a view on the managed cluster of the work that has been applied.
@@ -25,11 +26,10 @@ The AppliedWork API is not meant for external use and it's only meant for intern
 
 ### Goals
 
-- Define a new namespace scope AppliedWork internal API.
+- Define a new AppliedWork internal API.
 
 ### Non-Goals
 
-- Handle cluster scope workloads.
 - Handle applied resource status feedback.
 
 ## Proposal
@@ -40,7 +40,7 @@ We propose to introduce a new `AppliedWork` API
 
 #### API change  
 
-Add a new `AppliedWork` internal API  
+Add a new `AppliedWork` internal API:
 
 ```go
 // AppliedWork represents an applied work on managed cluster that is placed
@@ -56,24 +56,54 @@ type AppliedWork struct {
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
 	// Spec represents the desired configuration of AppliedWork.
+	// +required
 	Spec AppliedWorkSpec `json:"spec"`
+
+    // Status represents the current status of AppliedWork.
+	// +optional
+	Status AppliedtWorkStatus `json:"status,omitempty"`
 }
 
 // AppliedWorkList contains a list of AppliedWork
 type AppliedWorkList struct {
 	metav1.TypeMeta `json:",inline"`
 	// Standard list metadata.
+	// +optional
 	metav1.ListMeta `json:"metadata,omitempty"`
 	// List of works.
+	// +listType=set
 	Items []AppliedWork `json:"items"`
 }
 
 // AppliedWorkSpec represents the desired configuration of AppliedWork
 type AppliedWorkSpec struct {
 	// WorkName represents the name of the related work on the hub.
+	// +required
 	WorkName string `json:"workName"`
 	// WorkNamespace represents the namespace of the related work on the hub.
+	// +required
 	WorkNamespace string `json:"workNamespace"`
+}
+
+// AppliedtWorkStatus represents the current status of AppliedWork
+type AppliedtWorkStatus struct {
+	// AppliedResources represents a list of resources defined within the Work that are applied.
+	// +optional
+	AppliedResources []AppliedResourceMeta `json:"appliedResources,omitempty"`
+}
+
+// AppliedResourceMeta represents the group, version, resource, name and namespace of a resource.
+// Since these resources have been created, they must have valid group, version, resource, namespace, and name.
+type AppliedResourceMeta struct {
+	// ResourceIdentifier provides the identifiers needed to interact with any arbitrary object.
+	// +required
+    ResourceIdentifier `json:",inline"`
+
+	// UID is set on successful deletion of the Kubernetes resource by controller. The
+	// resource might be still visible on the managed cluster after this field is set.
+	// It is not directly settable by a client.
+	// +optional
+	UID types.UID `json:"uid,omitempty"`
 }
 ```
 
@@ -88,14 +118,24 @@ metadata:
 spec:
   workName: work-01
   workNamespace: cluster1
+status:
+  appliedResources:
+  - group: apps
+    name: nginx-deployment
+    namespace: default
+    resource: deployments
+    uid: fcfe11e4-c658-4c6e-9985-d98b7a059d14
+    version: v1
 ```
 
-The applied workload resource will have a owner reference pointing at the associated AppliedWork. For example:
+The namespace scope applied workload resource will have a owner reference pointing at the associated AppliedWork. For example:
 
 ```yaml
-apiVersion: v1
-kind: Pod
+apiVersion: apps/v1
+kind: Deployment
 metadata:
+  name: nginx-deployment
+  namespace: default
   ownerReferences:
   - apiVersion: multicluster.x-k8s.io/v1alpha1
     kind: AppliedWork
