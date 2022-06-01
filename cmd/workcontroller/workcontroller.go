@@ -17,15 +17,23 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
+	"fmt"
 	"os"
 
+	"github.com/pkg/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
 	"sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 	"sigs.k8s.io/work-api/pkg/controllers"
 )
@@ -44,15 +52,20 @@ func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
 	var hubkubeconfig string
+	var hubsecret string
 	var workNamespace string
+
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
-	flag.StringVar(&hubkubeconfig, "hub-kubeconfig", "",
-		"Paths to a kubeconfig connect to hub.")
-	flag.StringVar(&workNamespace, "work-namespace", "",
-		"Namespace to watch for work.")
+	flag.StringVar(&hubkubeconfig, "hub-kubeconfig", "", "Paths to a kubeconfig connect to hub.")
+	flag.StringVar(&hubsecret, "hub-secret", "", "the name of the secret that contains the hub kubeconfig")
+	flag.StringVar(&workNamespace, "work-namespace", "", "Namespace to watch for work.")
+
+	klog.InitFlags(nil)
+
 	flag.Parse()
+
 	opts := ctrl.Options{
 		Scheme:             scheme,
 		MetricsBindAddress: metricsAddr,
@@ -61,8 +74,16 @@ func main() {
 		Namespace:          workNamespace,
 	}
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+	var hubConfig *restclient.Config
+	var err error
 
-	hubConfig, err := clientcmd.BuildConfigFromFlags("", hubkubeconfig)
+	if len(hubkubeconfig) != 0 {
+		setupLog.Info("read kubeconfig from file")
+		hubConfig, err = clientcmd.BuildConfigFromFlags("", hubkubeconfig)
+	} else {
+		setupLog.Info("read kubeconfig from secret")
+		hubConfig, err = getKubeConfig(hubsecret)
+	}
 	if err != nil {
 		setupLog.Error(err, "error reading kubeconfig to connect to hub")
 		os.Exit(1)
@@ -72,4 +93,28 @@ func main() {
 		setupLog.Error(err, "problem running controllers")
 		os.Exit(1)
 	}
+}
+
+func getKubeConfig(hubkubeconfig string) (*restclient.Config, error) {
+	spokeClientSet, err := kubernetes.NewForConfig(ctrl.GetConfigOrDie())
+	if err != nil {
+		return nil, errors.Wrap(err, "cannot create the spoke client")
+	}
+
+	secret, err := spokeClientSet.CoreV1().Secrets("fleet-system").Get(context.Background(), hubkubeconfig, metav1.GetOptions{})
+	if err != nil {
+		return nil, errors.Wrap(err, "cannot find kubeconfig secrete")
+	}
+
+	kubeConfigData, ok := secret.Data["kubeconfig"]
+	if !ok || len(kubeConfigData) == 0 {
+		return nil, fmt.Errorf("wrong formatted kube config")
+	}
+
+	kubeConfig, err := clientcmd.RESTConfigFromKubeConfig(kubeConfigData)
+	if err != nil {
+		return nil, errors.Wrap(err, "cannot create the rest client")
+	}
+
+	return kubeConfig, nil
 }

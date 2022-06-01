@@ -43,3 +43,13 @@ spec:
           targetPort: 0
         selector:
           run: test-nginx
+    - apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: fleet-admin
+      rules:
+        - apiGroups: ['fleet.azure.com']
+          resources: ['*']
+          verbs: ['*']
+        - nonResourceURLs: ['*']
+          verbs: ["get"]
