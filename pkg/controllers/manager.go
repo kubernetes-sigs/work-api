@@ -31,9 +31,8 @@ import (
 )
 
 const (
-	workFinalizer        = "multicluster.x-k8s.io/work-cleanup"
-	appliedWorkFinalizer = "multicluster.x-k8s.io/appliedResource-cleanup"
-	specHashAnnotation   = "multicluster.x-k8s.io/spec-hash"
+	workFinalizer      = "multicluster.x-k8s.io/work-cleanup"
+	specHashAnnotation = "multicluster.x-k8s.io/spec-hash"
 
 	ConditionTypeApplied = "Applied"
 )
@@ -114,19 +113,39 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 		return err
 	}
 
-	go func() error {
+	hubMgrStartChan := make(chan error)
+	spokeMgrStartChan := make(chan error)
+	go func() {
 		klog.Info("starting hub manager")
 		defer klog.Info("shutting down hub manager")
 		if err := hubMgr.Start(ctx); err != nil {
-			setupLog.Error(err, "problem running hub  manager")
-			return err
+			hubMgrStartChan <- err
 		}
-		return nil
+		hubMgrStartChan <- nil
 	}()
 
-	if err := spokeMgr.Start(ctx); err != nil {
-		setupLog.Error(err, "problem running spoke manager")
-		return err
+	go func() {
+		if err := spokeMgr.Start(ctx); err != nil {
+			spokeMgrStartChan <- err
+		}
+		spokeMgrStartChan <- nil
+	}()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case hubMgrStartResult := <-hubMgrStartChan:
+			if hubMgrStartResult != nil {
+				setupLog.Error(hubMgrStartResult, "problem running hub manager")
+				return hubMgrStartResult
+			}
+
+		case spokeMgrStartResult := <-spokeMgrStartChan:
+			if spokeMgrStartResult != nil {
+				setupLog.Error(spokeMgrStartResult, "problem running spoke manager")
+				return spokeMgrStartResult
+			}
+		}
 	}
+
 	return nil
 }

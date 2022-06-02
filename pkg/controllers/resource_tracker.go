@@ -6,8 +6,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
@@ -82,18 +80,4 @@ func checkConsistentExist(work *workapi.Work, appliedWork *workapi.AppliedWork, 
 		klog.InfoS("both applied and work are garbage collected", "item", workName)
 	}
 	return nil
-}
-
-func (r *appliedResourceTracker) decodeUnstructured(manifest workapi.Manifest) (schema.GroupVersionResource, *unstructured.Unstructured, error) {
-	unstructuredObj := &unstructured.Unstructured{}
-	err := unstructuredObj.UnmarshalJSON(manifest.Raw)
-	if err != nil {
-		return schema.GroupVersionResource{}, nil, fmt.Errorf("Failed to decode object: %w", err)
-	}
-	mapping, err := r.restMapper.RESTMapping(unstructuredObj.GroupVersionKind().GroupKind(), unstructuredObj.GroupVersionKind().Version)
-	if err != nil {
-		return schema.GroupVersionResource{}, nil, fmt.Errorf("Failed to find gvr from restmapping: %w", err)
-	}
-
-	return mapping.Resource, unstructuredObj, nil
 }
