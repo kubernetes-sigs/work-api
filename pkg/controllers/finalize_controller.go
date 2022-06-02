@@ -63,7 +63,7 @@ func (r *FinalizeWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	var appliedWork *workv1alpha1.AppliedWork
 	if controllerutil.ContainsFinalizer(work, workFinalizer) {
-		appliedWork, err = r.spokeClient.MulticlusterV1alpha1().AppliedWorks().Get(ctx, req.Name, metav1.GetOptions{})
+		_, err = r.spokeClient.MulticlusterV1alpha1().AppliedWorks().Get(ctx, req.Name, metav1.GetOptions{})
 		if err != nil {
 			if errors.IsNotFound(err) {
 				klog.ErrorS(err, "the finalizer appliedWork object doesn't exist, we will add it back", "name", req.Name)
@@ -87,7 +87,7 @@ func (r *FinalizeWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			WorkNamespace: req.Namespace,
 		},
 	}
-	appliedWork, err = r.spokeClient.MulticlusterV1alpha1().AppliedWorks().Create(ctx, appliedWork, metav1.CreateOptions{})
+	_, err = r.spokeClient.MulticlusterV1alpha1().AppliedWorks().Create(ctx, appliedWork, metav1.CreateOptions{})
 	if err != nil && !errors.IsAlreadyExists(err) {
 		// if this conflicts, we'll simply try again later
 		klog.ErrorS(err, "failed to create the appliedWork", "name", req.Name)

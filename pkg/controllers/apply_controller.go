@@ -213,8 +213,12 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 	}
 
 	if isManifestModified(observedGeneration, curObj, workObj) || needUpdate {
-		newData, err := workObj.MarshalJSON()
 		var actual *unstructured.Unstructured
+		newData, err := workObj.MarshalJSON()
+		if err != nil {
+			klog.ErrorS(err, "work object json marshal failed", "gvr", gvr, "obj", workObj.GetName())
+			return nil, false, err
+		}
 		// try to use severside apply to be safe
 		actual, err = r.spokeDynamicClient.Resource(gvr).Namespace(workObj.GetNamespace()).
 			Patch(context.TODO(), workObj.GetName(), types.ApplyPatchType, newData,

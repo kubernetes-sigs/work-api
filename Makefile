@@ -64,7 +64,7 @@ generate:
 # Generate manifests e.g. CRD, RBAC etc.
 .PHONY: manifests
 manifests:
-	$(CONTROLLER_GEN) $(CRD_OPTIONS) rbac:roleName=work-manager webhook paths="./pkg/apis/v1alpha1" output:crd:artifacts:config=config/crd output:stdout
+	$(CONTROLLER_GEN) $(CRD_OPTIONS) rbac:roleName=work-manager webhook schemapatch:manifests="config/crd-base" paths="./pkg/apis/v1alpha1" output:crd:none output:schemapatch:dir="config/crd"
 
 # Run tests
 .PHONY: test
