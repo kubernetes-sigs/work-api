@@ -1,16 +1,16 @@
 
 # Adds namespace to all resources.
-namespace: work
+namespace: fleet-system
 
 resources:
 - ./component_namespace.yaml
 - ./service_account.yaml
-- ./clusterrole_binding.yaml
+- ./admin_clusterrole_binding.yaml
 - ./deployment.yaml
 
 images:
 - name: work-api-controller:latest
-  newName: nerdyyatrice/work-api-controller
+  newName: work-api-controller
   newTag: latest
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization

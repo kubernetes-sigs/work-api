@@ -19,7 +19,6 @@ package e2e
 import (
 	"context"
 	"fmt"
-
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/meta"
