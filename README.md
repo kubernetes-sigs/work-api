@@ -59,6 +59,14 @@ rm hub-kubeconfig
 kubectl apply -k deploy
 ```
 
+### run the controller against the Spoke cluster directly 
+```shell
+kubectl delete secret hub-kubeconfig-secret -n fleet-system
+kubectl create secret generic hub-kubeconfig-secret --from-file=kubeconfig=/Users/ryanzhang/.kube/hub -n fleet-system
+go run cmd/workcontroller/workcontroller.go --work-namespace=cluster-a --hub-secret=hub-kubeconfig-secret
+```
+
+
 ### Deploy a Work on the Hub cluster
 On the `Hub` cluster terminal, run the following command:
 ```
@@ -75,6 +83,13 @@ $ kubectl -n default get service test-nginx
 NAME         TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE
 test-nginx   ClusterIP   10.96.96.136   <none>        80/TCP    46s
 ```
+
+### Modify the Work on the Hub cluster
+On the `Hub` cluster terminal, run the following command:
+```
+kubectl apply -f examples/example-work-modify.yaml
+```
+
 
 ### Code of conduct
 

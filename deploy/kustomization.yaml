@@ -1,11 +1,11 @@
 
 # Adds namespace to all resources.
-namespace: work
+namespace: fleet-system
 
 resources:
 - ./component_namespace.yaml
 - ./service_account.yaml
-- ./clusterrole_binding.yaml
+- ./admin_clusterrole_binding.yaml
 - ./deployment.yaml
 
 images:

@@ -16,7 +16,8 @@ spec:
         selector:
           matchLabels:
             app: test-nginx
-        strategy: {}
+        strategy:
+          type: RollingUpdate
         template:
           metadata:
             creationTimestamp: null
@@ -40,6 +41,5 @@ spec:
         ports:
         - port: 80
           protocol: TCP
-          targetPort: 0
         selector:
           run: test-nginx
