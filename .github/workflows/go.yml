@@ -82,4 +82,4 @@ jobs:
         uses: golangci/golangci-lint-action@v2
         with:
           version: ${{ env.GOLANGCI_VERSION }}
-        timeout-minutes: 3
+        timeout-minutes: 10
