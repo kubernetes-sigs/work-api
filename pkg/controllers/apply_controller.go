@@ -24,7 +24,6 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
-	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -202,24 +201,27 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 		return nil, false, err
 	}
 
-	if !findOwnerReference(curObj.GetOwnerReferences(), workObj.GetOwnerReferences()[0]) {
+	if !hasSharedOwnerReference(curObj.GetOwnerReferences(), workObj.GetOwnerReferences()[0]) {
 		// TODO: Block All Owner reference in the Work Manifest.
 		err = fmt.Errorf("this object is not owned by the work-api")
 		klog.V(5).InfoS("This object is not owned by the work-api.", "gvr", gvr, "obj", workObj.GetName(), "err", err)
 		return nil, false, err
 	}
 
-	// Compare and update the unstrcuctured.
-	needUpdate := false
-	if !isSameUnstructuredMeta(workObj, curObj) {
-		klog.V(5).InfoS("work object meta has changed", "gvr", gvr, "obj", workObj.GetName())
-		needUpdate = true
+	// Compare the unstructured object and update if needed.
+	updateWarranted := isUpdateWarranted(workObj, curObj)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if updateWarranted {
+		klog.V(5).InfoS("work object's specification has changed", "gvr", gvr, "obj", workObj.GetName())
 		workObj.SetAnnotations(mergeMapOverrideWithDst(curObj.GetAnnotations(), workObj.GetAnnotations()))
 		workObj.SetLabels(mergeMapOverrideWithDst(curObj.GetLabels(), workObj.GetLabels()))
 		workObj.SetOwnerReferences(mergeOwnerReference(curObj.GetOwnerReferences(), workObj.GetOwnerReferences()))
 	}
 
-	if isManifestModified(observedGeneration, curObj, workObj) || needUpdate {
+	if updateWarranted {
 		var actual *unstructured.Unstructured
 		newData, err := workObj.MarshalJSON()
 		if err != nil {
@@ -230,6 +232,7 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 		actual, err = r.spokeDynamicClient.Resource(gvr).Namespace(workObj.GetNamespace()).
 			Patch(context.TODO(), workObj.GetName(), types.ApplyPatchType, newData,
 				metav1.PatchOptions{Force: pointer.Bool(true), FieldManager: "work-api agent"})
+
 		if err != nil {
 			klog.ErrorS(err, "work object patched failed", "gvr", gvr, "obj", workObj.GetName())
 			workObj.SetResourceVersion(curObj.GetResourceVersion())
@@ -251,31 +254,24 @@ func (r *ApplyWorkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		builder.WithPredicates(predicate.ResourceVersionChangedPredicate{})).Complete(r)
 }
 
-// Return true when label/annotation is changed or generation is changed
-func isManifestModified(observedGeneration int64, curObj, workObj *unstructured.Unstructured) bool {
-	if curObj.GetGeneration() != observedGeneration {
-		klog.V(5).InfoS("work object generation has changed", "obj", curObj.GetName(),
-			"curobj generation", curObj.GetGeneration(), "observedGeneration", observedGeneration)
-		return true
-	}
-
-	return false
+// Determines if differences between two unstructured.Unstructured objects
+// differ in ways that warrant the update (reapply) of the object.
+func isUpdateWarranted(obj1, obj2 *unstructured.Unstructured) bool {
+	return obj1.GetAnnotations()[specHashAnnotation] == obj2.GetAnnotations()[specHashAnnotation]
 }
 
-// isSameUnstructuredMeta compares the metadata of two unstructured object.
-func isSameUnstructuredMeta(obj1, obj2 *unstructured.Unstructured) bool {
-	// we just care about label/annotation and owner references
-	if !equality.Semantic.DeepEqual(obj1.GetLabels(), obj2.GetLabels()) {
-		return false
-	}
-	if !equality.Semantic.DeepEqual(obj1.GetAnnotations(), obj2.GetAnnotations()) {
-		return false
-	}
-	if !equality.Semantic.DeepEqual(obj1.GetOwnerReferences(), obj2.GetOwnerReferences()) {
-		return false
+// Generates a hash of the spec annotation from a unstructured object.
+func generateSpecHash(obj *unstructured.Unstructured) (string, error) {
+	data := obj.DeepCopy().Object
+	delete(data, "metadata")
+	delete(data, "status")
+
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return "", err
 	}
 
-	return true
+	return fmt.Sprintf("%x", sha256.Sum256(jsonBytes)), nil
 }
 
 // MergeMapOverrideWithDst merges two could be nil maps. Keep the dst for any conflicts,
@@ -294,9 +290,9 @@ func mergeMapOverrideWithDst(src, dst map[string]string) map[string]string {
 	return r
 }
 
-func findOwnerReference(owners []metav1.OwnerReference, target metav1.OwnerReference) bool {
+// Determines if two arrays contain the same metav1.OwnerReference.
+func hasSharedOwnerReference(owners []metav1.OwnerReference, target metav1.OwnerReference) bool {
 	// TODO: Move to a util directory or find an existing library.
-
 	for _, owner := range owners {
 		if owner.APIVersion == target.APIVersion && owner.Kind == target.Kind && owner.Name == target.Name && owner.UID == target.UID {
 			return true
@@ -305,14 +301,16 @@ func findOwnerReference(owners []metav1.OwnerReference, target metav1.OwnerRefer
 	return false
 }
 
+// Inserts the owner reference into the array of existing owner references.
 func insertOwnerReference(owners []metav1.OwnerReference, newOwner metav1.OwnerReference) []metav1.OwnerReference {
-	if findOwnerReference(owners, newOwner) {
+	if hasSharedOwnerReference(owners, newOwner) {
 		return owners
 	} else {
 		return append(owners, newOwner)
 	}
 }
 
+// Merges two owner reference arrays.
 func mergeOwnerReference(owners, newOwners []metav1.OwnerReference) []metav1.OwnerReference {
 	for _, newOwner := range newOwners {
 		owners = insertOwnerReference(owners, newOwner)
@@ -365,17 +363,11 @@ func findObservedGenerationOfManifest(
 // setSpecHashAnnotation computes the hash of the provided spec and sets an annotation of the
 // hash on the provided unstructured objectt. This method is used internally by Apply<type> methods.
 func setSpecHashAnnotation(obj *unstructured.Unstructured) error {
-	data := obj.DeepCopy().Object
-	// do not hash metadata and status section
-	delete(data, "metadata")
-	delete(data, "status")
-
-	jsonBytes, err := json.Marshal(data)
+	specHash, err := generateSpecHash(obj)
 	if err != nil {
 		return err
 	}
 
-	specHash := fmt.Sprintf("%x", sha256.Sum256(jsonBytes))
 	annotation := obj.GetAnnotations()
 	if annotation == nil {
 		annotation = map[string]string{}
@@ -385,6 +377,7 @@ func setSpecHashAnnotation(obj *unstructured.Unstructured) error {
 	return nil
 }
 
+// Builds a resource identifier for a given unstructured.Unstructured object.
 func buildResourceIdentifier(index int, object *unstructured.Unstructured, gvr schema.GroupVersionResource) workv1alpha1.ResourceIdentifier {
 	identifier := workv1alpha1.ResourceIdentifier{
 		Ordinal: index,
