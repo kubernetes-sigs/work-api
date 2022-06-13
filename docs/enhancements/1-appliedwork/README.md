@@ -10,23 +10,23 @@
 
 ## Summary
 
-The proposed work would define a new AppliedWork internal API to represents a workload that is applied on a managed cluster.
+This proposal would define a new cluster scoped AppliedWork internal API to represents a workload and/or cluster wide configurations that are applied on a managed cluster.
 
 ## Motivation
 
-The AppliedWork CR is to be an anchor on the managed cluster to ease garbage collection of the applied workload.
+The AppliedWork CR is to be an anchor on the managed cluster to ease garbage collection of the applied workload and or the applied cluster scoped resources.
 Each applied workload resource will have a resource identifier reference stored in the AppliedWork status.
-Additionally, each namespace scope applied workload resource will have a owner reference pointing at the AppliedWork CR.
+Additionally, each namespace scoped applied workload resource will have a owner reference pointing at the AppliedWork CR.
 
 By leveraging this AppliedWork API:
-- Provide a view on the managed cluster of the work that has been applied.
+- Provide a view on the managed cluster of the work and configurations that has been applied.
 - When the AppliedWork CR is deleted, all related applied workload resources will be cascade deleted.
 
 The AppliedWork API is not meant for external use and it's only meant for internal use to ease garbage collection of applied workload on the managed cluster.
 
 ### Goals
 
-- Define a new AppliedWork internal API.
+- Define a new cluster scoped AppliedWork internal API.
 
 ### Non-Goals
 
@@ -43,14 +43,13 @@ We propose to introduce a new `AppliedWork` API
 Add a new `AppliedWork` internal API:
 
 ```go
-// AppliedWork represents an applied work on managed cluster that is placed
+// AppliedWork is a cluster scoped resource that 
+// represents an applied work and or cluster wide configurations that is placed
 // on a managed cluster. An appliedwork links to a work on a hub recording resources
 // deployed in the managed cluster.
 // When the agent is removed from managed cluster, cluster-admin on managed cluster
 // can delete the appliedwork to remove resources deployed by the agent.
-// The name of the appliedwork must be the same as {work name}
-// The namespace of the appliedwork should be the same as the resource applied on
-// the managed cluster.
+// The name of the appliedwork must be unique since the appledwork is cluster scoped.
 type AppliedWork struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -128,7 +127,9 @@ status:
     version: v1
 ```
 
-The namespace scope applied workload resource will have a owner reference pointing at the associated AppliedWork. For example:
+In addition, if the workload contains namespace scoped resources then
+they will have owner references pointing to their associated AppliedWork.
+For example:
 
 ```yaml
 apiVersion: apps/v1
