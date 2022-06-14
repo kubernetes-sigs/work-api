@@ -219,9 +219,6 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 		workObj.SetAnnotations(mergeMapOverrideWithDst(curObj.GetAnnotations(), workObj.GetAnnotations()))
 		workObj.SetLabels(mergeMapOverrideWithDst(curObj.GetLabels(), workObj.GetLabels()))
 		workObj.SetOwnerReferences(mergeOwnerReference(curObj.GetOwnerReferences(), workObj.GetOwnerReferences()))
-	}
-
-	if updateWarranted {
 		var actual *unstructured.Unstructured
 		newData, err := workObj.MarshalJSON()
 		if err != nil {
