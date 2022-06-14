@@ -13,7 +13,7 @@ defaults:
 env:
   # Common versions
   GO_VERSION: 1.17.x
-  GO_PATH: '/home/runner/work/work-api/work-api/go'
+  GO_PATH: '/home/runner/work/k8s-work-api/k8s-work-api/go'
 
 jobs:
   detect-noop:
@@ -100,7 +100,7 @@ jobs:
       - name: images
         run: make docker-build
         env:
-          GOPATH: '/home/runner/work/work-api/work-api/go'
+          GOPATH: '/home/runner/work/k8s-work-api/k8s-work-api/go'
       - name: setup kind
         uses: engineerd/setup-kind@v0.5.0
         with:
