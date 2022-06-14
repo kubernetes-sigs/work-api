@@ -52,7 +52,6 @@ jobs:
 
   test:
     name: unit test
-    needs: verify
     runs-on: ubuntu-latest
     if: needs.detect-noop.outputs.noop != 'true'
     steps:
