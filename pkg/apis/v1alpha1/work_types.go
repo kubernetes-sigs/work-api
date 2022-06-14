@@ -21,6 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+const WorkKind = "Work"
+
 // WorkSpec defines the desired state of Work
 type WorkSpec struct {
 	// Workload represents the manifest workload to be deployed on spoke cluster

@@ -36,6 +36,7 @@ import (
 
 	"sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 	"sigs.k8s.io/work-api/pkg/controllers"
+	"sigs.k8s.io/work-api/version"
 )
 
 var (
@@ -54,24 +55,36 @@ func main() {
 	var hubkubeconfig string
 	var hubsecret string
 	var workNamespace string
+	var certDir string
+	var webhookPort int
+	var healthAddr string
+	var concurrentReconciles int
 
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
+	flag.IntVar(&webhookPort, "webhook-port", 9443, "admission webhook listen address")
+	flag.StringVar(&certDir, "webhook-cert-dir", "/k8s-webhook-server/serving-certs", "Admission webhook cert/key dir.")
+	flag.StringVar(&healthAddr, "health-addr", ":9440", "The address the health endpoint binds to.")
 	flag.StringVar(&hubkubeconfig, "hub-kubeconfig", "", "Paths to a kubeconfig connect to hub.")
 	flag.StringVar(&hubsecret, "hub-secret", "", "the name of the secret that contains the hub kubeconfig")
 	flag.StringVar(&workNamespace, "work-namespace", "", "Namespace to watch for work.")
+	flag.IntVar(&concurrentReconciles, "concurrency", 5, "max work reconciler concurrency")
 
+	// Init klog flags
 	klog.InitFlags(nil)
 
 	flag.Parse()
 
 	opts := ctrl.Options{
-		Scheme:             scheme,
-		MetricsBindAddress: metricsAddr,
-		LeaderElection:     enableLeaderElection,
-		Port:               9443,
-		Namespace:          workNamespace,
+		Scheme:                 scheme,
+		MetricsBindAddress:     metricsAddr,
+		LeaderElection:         enableLeaderElection,
+		LeaderElectionID:       "azure-fleet-work-api-" + version.GitRevision,
+		Port:                   webhookPort,
+		CertDir:                certDir,
+		HealthProbeBindAddress: healthAddr,
+		Namespace:              workNamespace,
 	}
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 	var hubConfig *restclient.Config

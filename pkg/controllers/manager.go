@@ -25,6 +25,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 
 	clientset "sigs.k8s.io/work-api/pkg/client/clientset/versioned"
@@ -35,37 +36,37 @@ const (
 	specHashAnnotation = "multicluster.x-k8s.io/spec-hash"
 
 	ConditionTypeApplied = "Applied"
+
+	// number of concurrent reconcile loop for work
+	maxWorkConcurrency = 5
 )
 
 // Start the controllers with the supplied config
 func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Logger, opts ctrl.Options) error {
 	hubMgr, err := ctrl.NewManager(hubCfg, opts)
 	if err != nil {
-		setupLog.Error(err, "unable to start hub manager")
-		os.Exit(1)
-	}
-
-	spokeOpts := ctrl.Options{
-		Scheme:             opts.Scheme,
-		LeaderElection:     opts.LeaderElection,
-		MetricsBindAddress: ":4848",
-		Port:               8443,
-	}
-	spokeMgr, err := ctrl.NewManager(spokeCfg, spokeOpts)
-	if err != nil {
-		setupLog.Error(err, "unable to start member manager")
+		setupLog.Error(err, "unable to create hub manager")
 		os.Exit(1)
 	}
 
 	spokeDynamicClient, err := dynamic.NewForConfig(spokeCfg)
 	if err != nil {
-		setupLog.Error(err, "unable to start manager")
+		setupLog.Error(err, "unable to create spoke dynamic client")
 		os.Exit(1)
 	}
 
 	restMapper, err := apiutil.NewDynamicRESTMapper(spokeCfg, apiutil.WithLazyDiscovery)
 	if err != nil {
-		setupLog.Error(err, "unable to start manager")
+		setupLog.Error(err, "unable to create spoke rest mapper")
+		os.Exit(1)
+	}
+
+	spokeClient, err := client.New(spokeCfg, client.Options{
+		Scheme: opts.Scheme, Mapper: restMapper,
+	})
+
+	if err != nil {
+		setupLog.Error(err, "unable to create spoke client")
 		os.Exit(1)
 	}
 
@@ -73,78 +74,40 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 	if err != nil {
 		klog.Fatalf("Error building example clientset: %s", err.Error())
 	}
-	//
-	//hubClientset, err := clientset.NewForConfig(hubCfg)
-	//	if err != nil {
-	//		klog.Fatalf("Error building kubernetes clientset: %s", err.Error())
-	//	}
-	// hubInformerFactory := workinformers.NewSharedInformerFactory(hubClientset, time.Second*3)
-	// spokeInformerFactory := workinformers.NewSharedInformerFactory(spokeClientset, time.Second*3)
 
 	// TODO: Add event recorder
-	if err = newAppliedWorkReconciler(opts.Namespace, hubMgr.GetClient(), spokeMgr.GetClient(), spokeDynamicClient, restMapper).SetupWithManager(spokeMgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "AppliedWork")
-		return err
-	}
-
-	if err = newWorkStatusReconciler(hubMgr.GetClient(), spokeMgr.GetClient(), spokeDynamicClient, restMapper).SetupWithManager(hubMgr); err != nil {
+	if err = newWorkStatusReconciler(hubMgr.GetClient(), spokeClient, spokeDynamicClient, restMapper, maxWorkConcurrency).
+		SetupWithManager(hubMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkStatus")
 		return err
 	}
 
+	// TODO: Add event recorder
 	if err = (&ApplyWorkReconciler{
 		client:             hubMgr.GetClient(),
 		spokeDynamicClient: spokeDynamicClient,
-		spokeClient:        spokeMgr.GetClient(),
+		spokeClient:        spokeClient,
 		restMapper:         restMapper,
-		log:                ctrl.Log.WithName("Work reconciler"),
+		concurrency:        maxWorkConcurrency,
 	}).SetupWithManager(hubMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Work")
 		return err
 	}
 
+	// TODO: Add event recorder
 	if err = (&FinalizeWorkReconciler{
 		client:      hubMgr.GetClient(),
 		spokeClient: spokeClientset,
 		restMapper:  restMapper,
-		log:         ctrl.Log.WithName("WorkFinalize reconcier"),
 	}).SetupWithManager(hubMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkFinalize")
 		return err
 	}
 
-	hubMgrStartChan := make(chan error)
-	spokeMgrStartChan := make(chan error)
-	go func() {
-		klog.Info("starting hub manager")
-		defer klog.Info("shutting down hub manager")
-		if err := hubMgr.Start(ctx); err != nil {
-			hubMgrStartChan <- err
-		}
-		hubMgrStartChan <- nil
-	}()
-
-	go func() {
-		if err := spokeMgr.Start(ctx); err != nil {
-			spokeMgrStartChan <- err
-		}
-		spokeMgrStartChan <- nil
-	}()
-
-	for i := 0; i < 2; i++ {
-		select {
-		case hubMgrStartResult := <-hubMgrStartChan:
-			if hubMgrStartResult != nil {
-				setupLog.Error(hubMgrStartResult, "problem running hub manager")
-				return hubMgrStartResult
-			}
-
-		case spokeMgrStartResult := <-spokeMgrStartChan:
-			if spokeMgrStartResult != nil {
-				setupLog.Error(spokeMgrStartResult, "problem running spoke manager")
-				return spokeMgrStartResult
-			}
-		}
+	klog.Info("starting hub manager")
+	defer klog.Info("shutting down hub manager")
+	if err := hubMgr.Start(ctx); err != nil {
+		setupLog.Error(err, "problem running hub manager")
 	}
 
 	return nil

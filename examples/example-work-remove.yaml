@@ -16,7 +16,6 @@ spec:
         selector:
           matchLabels:
             app: test-nginx
-        strategy: {}
         template:
           metadata:
             creationTimestamp: null

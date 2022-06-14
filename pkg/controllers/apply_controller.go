@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -37,19 +36,22 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
+const workFieldManagerName = "work-api-agent"
+
 // ApplyWorkReconciler reconciles a Work object
 type ApplyWorkReconciler struct {
 	client             client.Client
 	spokeDynamicClient dynamic.Interface
 	spokeClient        client.Client
-	log                logr.Logger
 	restMapper         meta.RESTMapper
+	concurrency        int
 }
 
 type applyResult struct {
@@ -79,7 +81,13 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, nil
 	}
 
-	// we created the AppliedWork before setting the finalizer so it should exist
+	// leave the finalizer to clean up
+	if !work.DeletionTimestamp.IsZero() {
+		klog.InfoS("the work is being deleted, the work finalizer will garbage collect the resource", "item", req.NamespacedName)
+		return ctrl.Result{}, nil
+	}
+
+	// we created the AppliedWork before setting the finalizer, it should already exist
 	appliedWork := &workv1alpha1.AppliedWork{}
 	if err := r.spokeClient.Get(ctx, types.NamespacedName{Name: req.Name}, appliedWork); err != nil {
 		klog.ErrorS(err, "failed to get the appliedWork", "name", req.Name)
@@ -88,12 +96,12 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	owner := metav1.OwnerReference{
 		APIVersion: workv1alpha1.GroupVersion.String(),
-		Kind:       appliedWork.Kind,
+		Kind:       workv1alpha1.AppliedWorkKind,
 		Name:       appliedWork.GetName(),
 		UID:        appliedWork.GetUID(),
 	}
 
-	results := r.applyManifests(work.Spec.Workload.Manifests, work.Status.ManifestConditions, owner)
+	results := r.applyManifests(ctx, work.Spec.Workload.Manifests, owner)
 	errs := []error{}
 
 	// Update manifestCondition based on the results
@@ -135,8 +143,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	return ctrl.Result{}, nil
 }
 
-func (r *ApplyWorkReconciler) applyManifests(manifests []workv1alpha1.Manifest,
-	manifestConditions []workv1alpha1.ManifestCondition, owner metav1.OwnerReference) []applyResult {
+func (r *ApplyWorkReconciler) applyManifests(ctx context.Context, manifests []workv1alpha1.Manifest, owner metav1.OwnerReference) []applyResult {
 	var results []applyResult
 
 	for index, manifest := range manifests {
@@ -149,12 +156,16 @@ func (r *ApplyWorkReconciler) applyManifests(manifests []workv1alpha1.Manifest,
 		} else {
 			var obj *unstructured.Unstructured
 			result.identifier = buildResourceIdentifier(index, rawObj, gvr)
-			rawObj.SetOwnerReferences(insertOwnerReference(rawObj.GetOwnerReferences(), owner))
-			observedGeneration := findObservedGenerationOfManifest(result.identifier, manifestConditions)
-			obj, result.updated, result.err = r.applyUnstructured(gvr, rawObj, observedGeneration)
+			// TODO: add webhooks to block any manifest that has owner reference
+			rawObj.SetOwnerReferences([]metav1.OwnerReference{owner})
+			obj, result.updated, result.err = r.applyUnstructured(ctx, gvr, rawObj)
 			if result.err == nil {
 				result.generation = obj.GetGeneration()
-				klog.V(5).InfoS("applied an unstructrued object", "gvr", gvr, "obj", obj.GetName(), "new observedGeneration", result.generation)
+				if result.updated {
+					klog.V(5).InfoS("applied an unstructrued object", "gvr", gvr, "obj", obj.GetName(), "new observedGeneration", result.generation)
+				} else {
+					klog.V(8).InfoS("object spec has not changed", "gvr", gvr, "obj", obj.GetName())
+				}
 			} else {
 				klog.ErrorS(err, "Failed to apply an unstructrued object", "gvr", gvr, "obj", rawObj.GetName())
 			}
@@ -179,9 +190,9 @@ func (r *ApplyWorkReconciler) decodeUnstructured(manifest workv1alpha1.Manifest)
 }
 
 func (r *ApplyWorkReconciler) applyUnstructured(
+	ctx context.Context,
 	gvr schema.GroupVersionResource,
-	workObj *unstructured.Unstructured,
-	observedGeneration int64) (*unstructured.Unstructured, bool, error) {
+	workObj *unstructured.Unstructured) (*unstructured.Unstructured, bool, error) {
 
 	err := setSpecHashAnnotation(workObj)
 	if err != nil {
@@ -191,10 +202,10 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 	curObj, err := r.spokeDynamicClient.
 		Resource(gvr).
 		Namespace(workObj.GetNamespace()).
-		Get(context.TODO(), workObj.GetName(), metav1.GetOptions{})
+		Get(ctx, workObj.GetName(), metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		actual, err := r.spokeDynamicClient.Resource(gvr).Namespace(workObj.GetNamespace()).Create(
-			context.TODO(), workObj, metav1.CreateOptions{})
+			ctx, workObj, metav1.CreateOptions{FieldManager: workFieldManagerName})
 		return actual, true, err
 	}
 	if err != nil {
@@ -202,43 +213,33 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 	}
 
 	if !hasSharedOwnerReference(curObj.GetOwnerReferences(), workObj.GetOwnerReferences()[0]) {
-		// TODO: Block All Owner reference in the Work Manifest.
-		err = fmt.Errorf("this object is not owned by the work-api")
-		klog.V(5).InfoS("This object is not owned by the work-api.", "gvr", gvr, "obj", workObj.GetName(), "err", err)
+		err = fmt.Errorf("object %s:%s is not owned by the work-api anymore", gvr, curObj.GetName())
+		klog.ErrorS(err, "Found an object that is not owned by the work-api")
 		return nil, false, err
 	}
 
-	// Compare the unstructured object and update if needed.
-	updateWarranted := isUpdateWarranted(workObj, curObj)
-	if err != nil {
-		return nil, false, err
-	}
-
-	if updateWarranted {
-		klog.V(5).InfoS("work object's specification has changed", "gvr", gvr, "obj", workObj.GetName())
+	// We only try to update the object if its spec hash value has changed
+	if workObj.GetAnnotations()[specHashAnnotation] != curObj.GetAnnotations()[specHashAnnotation] {
+		klog.V(5).InfoS("work object's specification has changed", "gvr", gvr, "obj", workObj.GetName(),
+			"new hash", workObj.GetAnnotations()[specHashAnnotation], "existingHash", curObj.GetAnnotations()[specHashAnnotation])
 		workObj.SetAnnotations(mergeMapOverrideWithDst(curObj.GetAnnotations(), workObj.GetAnnotations()))
 		workObj.SetLabels(mergeMapOverrideWithDst(curObj.GetLabels(), workObj.GetLabels()))
 		workObj.SetOwnerReferences(mergeOwnerReference(curObj.GetOwnerReferences(), workObj.GetOwnerReferences()))
-		var actual *unstructured.Unstructured
+
 		newData, err := workObj.MarshalJSON()
 		if err != nil {
 			klog.ErrorS(err, "work object json marshal failed", "gvr", gvr, "obj", workObj.GetName())
 			return nil, false, err
 		}
-		// try to use severside apply to be safe
-		actual, err = r.spokeDynamicClient.Resource(gvr).Namespace(workObj.GetNamespace()).
-			Patch(context.TODO(), workObj.GetName(), types.ApplyPatchType, newData,
-				metav1.PatchOptions{Force: pointer.Bool(true), FieldManager: "work-api agent"})
-
+		// Use severside apply to be safe
+		actual, err := r.spokeDynamicClient.Resource(gvr).Namespace(workObj.GetNamespace()).
+			Patch(ctx, workObj.GetName(), types.ApplyPatchType, newData,
+				metav1.PatchOptions{Force: pointer.Bool(true), FieldManager: workFieldManagerName})
 		if err != nil {
 			klog.ErrorS(err, "work object patched failed", "gvr", gvr, "obj", workObj.GetName())
-			workObj.SetResourceVersion(curObj.GetResourceVersion())
-			actual, err = r.spokeDynamicClient.Resource(gvr).Namespace(workObj.GetNamespace()).Update(
-				context.TODO(), workObj, metav1.UpdateOptions{})
-			klog.V(5).InfoS("work object updated", "gvr", gvr, "obj", workObj.GetName(), "err", err)
-		} else {
-			klog.V(5).InfoS("work object patched", "gvr", gvr, "obj", workObj.GetName())
+			return nil, false, err
 		}
+		klog.V(5).InfoS("work object patched", "gvr", gvr, "obj", workObj.GetName())
 		return actual, true, err
 	}
 
@@ -247,17 +248,15 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 
 // SetupWithManager wires up the controller.
 func (r *ApplyWorkReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).For(&workv1alpha1.Work{},
-		builder.WithPredicates(predicate.ResourceVersionChangedPredicate{})).Complete(r)
+	return ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{
+			MaxConcurrentReconciles: r.concurrency,
+		}).
+		For(&workv1alpha1.Work{}, builder.WithPredicates(predicate.ResourceVersionChangedPredicate{})).
+		Complete(r)
 }
 
-// Determines if differences between two unstructured.Unstructured objects
-// differ in ways that warrant the update (reapply) of the object.
-func isUpdateWarranted(obj1, obj2 *unstructured.Unstructured) bool {
-	return obj1.GetAnnotations()[specHashAnnotation] == obj2.GetAnnotations()[specHashAnnotation]
-}
-
-// Generates a hash of the spec annotation from a unstructured object.
+// Generates a hash of the spec annotation from an unstructured object.
 func generateSpecHash(obj *unstructured.Unstructured) (string, error) {
 	data := obj.DeepCopy().Object
 	delete(data, "metadata")
@@ -338,23 +337,6 @@ func findManifestConditionByIdentifier(identifier workv1alpha1.ResourceIdentifie
 		}
 	}
 	return nil
-}
-
-// Find the observed generation for an applied condition type for a manifest.
-func findObservedGenerationOfManifest(
-	identifier workv1alpha1.ResourceIdentifier,
-	manifestConditions []workv1alpha1.ManifestCondition) int64 {
-	manifestCondition := findManifestConditionByIdentifier(identifier, manifestConditions)
-	if manifestCondition == nil {
-		return 0
-	}
-
-	condition := meta.FindStatusCondition(manifestCondition.Conditions, ConditionTypeApplied)
-	if condition == nil {
-		return 0
-	}
-
-	return condition.ObservedGeneration
 }
 
 // setSpecHashAnnotation computes the hash of the provided spec and sets an annotation of the

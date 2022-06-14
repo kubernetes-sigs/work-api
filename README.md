@@ -59,7 +59,7 @@ rm hub-kubeconfig
 kubectl apply -k deploy
 ```
 
-### run the controller against the Spoke cluster directly 
+### Run the controller against the Spoke cluster locally 
 ```shell
 kubectl delete secret hub-kubeconfig-secret -n fleet-system
 kubectl create secret generic hub-kubeconfig-secret --from-file=kubeconfig=/Users/ryanzhang/.kube/hub -n fleet-system

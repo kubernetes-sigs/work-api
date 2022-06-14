@@ -21,6 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+const AppliedWorkKind = "AppliedWork"
+
 // AppliedWorkSpec represents the desired configuration of AppliedWork
 type AppliedWorkSpec struct {
 	// WorkName represents the name of the related work on the hub.

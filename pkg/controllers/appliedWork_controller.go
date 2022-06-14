@@ -21,11 +21,9 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -37,19 +35,6 @@ import (
 type AppliedWorkReconciler struct {
 	appliedResourceTracker
 	clusterNameSpace string
-}
-
-func newAppliedWorkReconciler(clusterNameSpace string, hubClient client.Client, spokeClient client.Client,
-	spokeDynamicClient dynamic.Interface, restMapper meta.RESTMapper) *AppliedWorkReconciler {
-	return &AppliedWorkReconciler{
-		appliedResourceTracker: appliedResourceTracker{
-			hubClient:          hubClient,
-			spokeClient:        spokeClient,
-			spokeDynamicClient: spokeDynamicClient,
-			restMapper:         restMapper,
-		},
-		clusterNameSpace: clusterNameSpace,
-	}
 }
 
 // Reconcile implement the control loop logic for AppliedWork object.

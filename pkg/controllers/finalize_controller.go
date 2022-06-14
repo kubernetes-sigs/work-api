@@ -19,7 +19,6 @@ package controllers
 import (
 	"context"
 
-	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,7 +39,6 @@ type FinalizeWorkReconciler struct {
 	client      client.Client
 	spokeClient *versioned.Clientset
 	restMapper  meta.RESTMapper
-	log         logr.Logger
 }
 
 // Reconcile implement the control loop logic for finalizing Work object.

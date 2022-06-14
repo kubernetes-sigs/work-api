@@ -29,6 +29,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -38,16 +39,18 @@ import (
 // WorkStatusReconciler reconciles a Work object when its status changes
 type WorkStatusReconciler struct {
 	appliedResourceTracker
+	concurrency int
 }
 
-func newWorkStatusReconciler(hubClient client.Client, spokeClient client.Client, spokeDynamicClient dynamic.Interface, restMapper meta.RESTMapper) *WorkStatusReconciler {
+func newWorkStatusReconciler(hubClient client.Client, spokeClient client.Client, spokeDynamicClient dynamic.Interface, restMapper meta.RESTMapper, concurrency int) *WorkStatusReconciler {
 	return &WorkStatusReconciler{
-		appliedResourceTracker{
+		appliedResourceTracker: appliedResourceTracker{
 			hubClient:          hubClient,
 			spokeClient:        spokeClient,
 			spokeDynamicClient: spokeDynamicClient,
 			restMapper:         restMapper,
 		},
+		concurrency: concurrency,
 	}
 }
 
@@ -162,8 +165,12 @@ func isSameResource(appliedMeta workapi.AppliedResourceMeta, resourceId workapi.
 
 // SetupWithManager wires up the controller.
 func (r *WorkStatusReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).For(&workapi.Work{},
-		builder.WithPredicates(UpdateOnlyPredicate{}, predicate.ResourceVersionChangedPredicate{})).Complete(r)
+	return ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{
+			MaxConcurrentReconciles: r.concurrency,
+		}).
+		For(&workapi.Work{}, builder.WithPredicates(UpdateOnlyPredicate{}, predicate.ResourceVersionChangedPredicate{})).
+		Complete(r)
 }
 
 // We only need to process the update event
