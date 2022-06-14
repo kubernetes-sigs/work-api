@@ -42,7 +42,7 @@ spec:
             - "--hub-secret=hub-kubeconfig-secret"
           ports:
             - name: http
-              containerPort: 2112
+              containerPort: 8080
               protocol: TCP
           resources:
             {{- toYaml .Values.resources | nindent 12 }}

@@ -27,8 +27,6 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  # We deploy a controller that could work with permission lower than cluster-admin, the tradeoff is
-  # responsivity because list/watch cannot be maintained over too many namespaces.
   name: work-role
 subjects:
   - kind: ServiceAccount
