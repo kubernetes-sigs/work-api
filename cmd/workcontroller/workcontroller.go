@@ -60,7 +60,7 @@ func main() {
 	var healthAddr string
 	var concurrentReconciles int
 
-	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
+	flag.StringVar(&metricsAddr, "metrics-addr", ":2112", "The address the metric endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	flag.IntVar(&webhookPort, "webhook-port", 9443, "admission webhook listen address")
