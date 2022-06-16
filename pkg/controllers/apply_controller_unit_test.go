@@ -1,14 +1,13 @@
 package controllers
 
 import (
-	json2 "encoding/json"
-	"github.com/pkg/errors"
-	testing2 "k8s.io/client-go/testing"
+	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 
 	"github.com/crossplane/crossplane-runtime/pkg/test"
-	"github.com/go-logr/logr"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
@@ -16,9 +15,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/util/json"
 	utilrand "k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/dynamic/fake"
+	clienttesting "k8s.io/client-go/testing"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
@@ -37,40 +36,24 @@ var (
 		Version:  "v1",
 		Resource: "Deployment",
 	}
-	expectedGvr = schema.GroupVersionResource{
-		Group:    "apps",
-		Version:  "v1",
-		Resource: "Deployment",
-	}
-
-	emptyGvr       = schema.GroupVersionResource{}
 	testDeployment = appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Deployment",
 			APIVersion: "apps/v1",
 		},
-		ObjectMeta: metav1.ObjectMeta{Name: "TestDeployment"},
-	}
-	testPod = v1.Pod{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Pod",
-			APIVersion: "core/v1",
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "Deployment",
+			OwnerReferences: []metav1.OwnerReference{
+				ownerRef,
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			MinReadySeconds: 5,
 		},
 	}
-	testInvalidYaml       = []byte(getRandomString())
-	rawTestDeployment, _  = json.Marshal(testDeployment)
-	rawInvalidResource, _ = json.Marshal(testInvalidYaml)
-	rawMissingResource, _ = json.Marshal(testPod)
-	testManifest          = workv1alpha1.Manifest{RawExtension: runtime.RawExtension{
+	rawTestDeployment, _ = json.Marshal(testDeployment)
+	testManifest         = workv1alpha1.Manifest{RawExtension: runtime.RawExtension{
 		Raw: rawTestDeployment,
-	}}
-
-	InvalidManifest = workv1alpha1.Manifest{RawExtension: runtime.RawExtension{
-		Raw: rawInvalidResource,
-	}}
-
-	MissingManifest = workv1alpha1.Manifest{RawExtension: runtime.RawExtension{
-		Raw: rawMissingResource,
 	}}
 )
 
@@ -92,74 +75,69 @@ func (m testMapper) RESTMapping(gk schema.GroupKind, versions ...string) (*meta.
 }
 
 func TestApplyManifest(t *testing.T) {
-	testDeploymentWithOwnerRef := appsv1.Deployment{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Deployment",
-			APIVersion: "apps/v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{Name: "TestDeployment",
-			OwnerReferences: []metav1.OwnerReference{
-				ownerRef,
-			}},
-	}
-	rawDeploymentWithOwnerRef, _ := json.Marshal(testDeploymentWithOwnerRef)
-	testManifestWithOwnerRef := workv1alpha1.Manifest{RawExtension: runtime.RawExtension{
-		Raw: rawDeploymentWithOwnerRef,
+	// Manifests
+	rawInvalidResource, _ := json.Marshal([]byte(getRandomString()))
+	rawMissingResource, _ := json.Marshal(
+		v1.Pod{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "Pod",
+				APIVersion: "core/v1",
+			},
+		})
+	InvalidManifest := workv1alpha1.Manifest{RawExtension: runtime.RawExtension{
+		Raw: rawInvalidResource,
 	}}
-	failDynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
-	failDynamicClient.PrependReactor("get", "*", func(action testing2.Action) (handled bool, ret runtime.Object, err error) {
+	MissingManifest := workv1alpha1.Manifest{RawExtension: runtime.RawExtension{
+		Raw: rawMissingResource,
+	}}
+
+	// GVRs
+	expectedGvr := schema.GroupVersionResource{
+		Group:    "apps",
+		Version:  "v1",
+		Resource: "Deployment",
+	}
+	emptyGvr := schema.GroupVersionResource{}
+
+	// DynamicClients
+	clientFailDynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
+	clientFailDynamicClient.PrependReactor("get", "*", func(action clienttesting.Action) (handled bool, ret runtime.Object, err error) {
 		return true, nil, errors.New("Failed to apply an unstructrued object")
 	})
 
 	testCases := map[string]struct {
-		reconciler ApplyWorkReconciler
-		ml         []workv1alpha1.Manifest
-		mcl        []workv1alpha1.ManifestCondition
-		generation int64
-		wantGvr    schema.GroupVersionResource
-		wantErr    error
+		reconciler   ApplyWorkReconciler
+		manifestList []workv1alpha1.Manifest
+		generation   int64
+		updated      bool
+		wantGvr      schema.GroupVersionResource
+		wantErr      error
 	}{
 		"manifest is in proper format/ happy path": {
 			reconciler: ApplyWorkReconciler{
 				client:             &test.MockClient{},
 				spokeDynamicClient: fakeDynamicClient,
 				spokeClient:        &test.MockClient{},
-				log:                logr.Logger{},
 				restMapper:         testMapper{},
 			},
-			ml:         append([]workv1alpha1.Manifest{}, testManifest),
-			mcl:        []workv1alpha1.ManifestCondition{},
-			generation: 0,
-			wantGvr:    expectedGvr,
-			wantErr:    nil,
-		},
-		"manifest is in proper format/ owner reference already exists / should succeed": {
-			reconciler: ApplyWorkReconciler{
-				client:             &test.MockClient{},
-				spokeDynamicClient: fakeDynamicClient,
-				spokeClient:        &test.MockClient{},
-				log:                logr.Logger{},
-				restMapper:         testMapper{},
-			},
-			ml:         append([]workv1alpha1.Manifest{}, testManifestWithOwnerRef),
-			mcl:        []workv1alpha1.ManifestCondition{},
-			generation: 0,
-			wantGvr:    expectedGvr,
-			wantErr:    nil,
+			manifestList: append([]workv1alpha1.Manifest{}, testManifest),
+			generation:   0,
+			updated:      true,
+			wantGvr:      expectedGvr,
+			wantErr:      nil,
 		},
 		"manifest has incorrect syntax/ decode fail": {
 			reconciler: ApplyWorkReconciler{
 				client:             &test.MockClient{},
 				spokeDynamicClient: fakeDynamicClient,
 				spokeClient:        &test.MockClient{},
-				log:                logr.Logger{},
 				restMapper:         testMapper{},
 			},
-			ml:         append([]workv1alpha1.Manifest{}, InvalidManifest),
-			mcl:        []workv1alpha1.ManifestCondition{},
-			generation: 0,
-			wantGvr:    emptyGvr,
-			wantErr: &json2.UnmarshalTypeError{
+			manifestList: append([]workv1alpha1.Manifest{}, InvalidManifest),
+			generation:   0,
+			updated:      false,
+			wantGvr:      emptyGvr,
+			wantErr: &json.UnmarshalTypeError{
 				Value: "string",
 				Type:  reflect.TypeOf(map[string]interface{}{}),
 			},
@@ -169,82 +147,38 @@ func TestApplyManifest(t *testing.T) {
 				client:             &test.MockClient{},
 				spokeDynamicClient: fakeDynamicClient,
 				spokeClient:        &test.MockClient{},
-				log:                logr.Logger{},
 				restMapper:         testMapper{},
 			},
-			ml:         append([]workv1alpha1.Manifest{}, MissingManifest),
-			mcl:        []workv1alpha1.ManifestCondition{},
-			generation: 0,
-			wantGvr:    emptyGvr,
-			wantErr:    errors.New("failed to find gvr from restmapping: test error: mapping does not exist."),
-		},
-		"manifest is in proper format / existing ManifestCondition does not have condition / fail": {
-			reconciler: ApplyWorkReconciler{
-				client:             &test.MockClient{},
-				spokeDynamicClient: fakeDynamicClient,
-				spokeClient:        &test.MockClient{},
-				log:                logr.Logger{},
-				restMapper:         testMapper{},
-			},
-			ml:         append([]workv1alpha1.Manifest{}, testManifest),
-			mcl:        []workv1alpha1.ManifestCondition{},
-			generation: 0,
-			wantGvr:    expectedGvr,
-			wantErr:    nil,
-		},
-		"manifest is in proper format / existing ManifestCondition has incorrect condition / fail": {
-			reconciler: ApplyWorkReconciler{
-				client:             &test.MockClient{},
-				spokeDynamicClient: fakeDynamicClient,
-				spokeClient:        &test.MockClient{},
-				log:                logr.Logger{},
-				restMapper:         testMapper{},
-			},
-			ml: append([]workv1alpha1.Manifest{}, testManifest),
-			mcl: append([]workv1alpha1.ManifestCondition{}, workv1alpha1.ManifestCondition{
-				Identifier: workv1alpha1.ResourceIdentifier{
-					Ordinal:   0,
-					Group:     testDeployment.GroupVersionKind().Group,
-					Version:   testDeployment.GroupVersionKind().Version,
-					Kind:      testDeployment.GroupVersionKind().Kind,
-					Resource:  testGvr.Resource,
-					Namespace: getRandomString(),
-					Name:      getRandomString(),
-				},
-				Conditions: nil,
-			}),
-			generation: 0,
-			wantGvr:    expectedGvr,
-			wantErr:    nil,
+			manifestList: append([]workv1alpha1.Manifest{}, MissingManifest),
+			generation:   0,
+			updated:      false,
+			wantGvr:      emptyGvr,
+			wantErr:      errors.New("failed to find gvr from restmapping: test error: mapping does not exist."),
 		},
 		"manifest is in proper format/ should fail applyUnstructured": {
 			reconciler: ApplyWorkReconciler{
 				client:             &test.MockClient{},
-				spokeDynamicClient: failDynamicClient,
+				spokeDynamicClient: clientFailDynamicClient,
 				spokeClient:        &test.MockClient{},
-				log:                logr.Logger{},
 				restMapper:         testMapper{},
 			},
-			ml:         append([]workv1alpha1.Manifest{}, testManifest),
-			mcl:        []workv1alpha1.ManifestCondition{},
-			generation: 0,
-			wantGvr:    expectedGvr,
-			wantErr:    errors.New("Failed to apply an unstructrued object"),
+			manifestList: append([]workv1alpha1.Manifest{}, testManifest),
+			generation:   0,
+			updated:      false,
+			wantGvr:      expectedGvr,
+			wantErr:      errors.New("Failed to apply an unstructrued object"),
 		},
 	}
 
 	for testName, testCase := range testCases {
 		t.Run(testName, func(t *testing.T) {
-			resultList := testCase.reconciler.applyManifests(testCase.ml, testCase.mcl, ownerRef)
+			resultList := testCase.reconciler.applyManifests(context.Background(), testCase.manifestList, ownerRef)
 			for _, result := range resultList {
 				if testCase.wantErr != nil {
 					assert.Containsf(t, result.err.Error(), testCase.wantErr.Error(), "Incorrect error for Testcase %s", testName)
 				}
-				if result.identifier.Kind == "Deployment" {
-					assert.Equalf(t, testCase.generation, result.generation, "Testcase %s: generation incorrect", testName)
-				} else {
-					assert.Equalf(t, int64(0), result.generation, "Testcase %s: non-involved resources generation changed", testName)
-				}
+				assert.Equalf(t, testCase.generation, result.generation, "Testcase %s: generation incorrect", testName)
+				assert.Equalf(t, testCase.updated, result.updated, "Testcase %s: Updated boolean incorrect", testName)
 			}
 		})
 	}
