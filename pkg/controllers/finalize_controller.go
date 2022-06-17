@@ -20,7 +20,6 @@ import (
 	"context"
 
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
@@ -37,8 +36,7 @@ import (
 // FinalizeWorkReconciler reconciles a Work object for finalization
 type FinalizeWorkReconciler struct {
 	client      client.Client
-	spokeClient *versioned.Clientset
-	restMapper  meta.RESTMapper
+	spokeClient versioned.Interface
 }
 
 // Reconcile implement the control loop logic for finalizing Work object.

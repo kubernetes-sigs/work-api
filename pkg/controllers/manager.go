@@ -98,7 +98,6 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 	if err = (&FinalizeWorkReconciler{
 		client:      hubMgr.GetClient(),
 		spokeClient: spokeClientset,
-		restMapper:  restMapper,
 	}).SetupWithManager(hubMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkFinalize")
 		return err
