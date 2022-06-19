@@ -28,60 +28,92 @@ In most use cases, the users or controllers on the hub cluster only care about c
 
 ### Goals
 
-- Update the `Work` API to optionally enable the resource status sync.
+- Create a new cluster scoped `WorkManifestConfig` API to define the resource status sync configuration for a workload manifest. 
 - Update the `Work` API to optionally store the resource status sync values.
 
 ### Non-Goals
 
 ## Proposal
 
-We propose to update the `Work` API so the user can optionally specify the status sync rules of the resources applied by the work controller. The work controller will sync status fields based on the sync rules back to the `Work` CR.
+We propose to create a new `WorkManifestConfig` cluster scoped API so the user can optionally 
+specify the status sync configuration for the resources applied by the `Work` API.
+The suggested naming scheme for `WorkManifestConfig` is group-version-kind, which is the GVK of the manifest it represents.
+
+We propose to update the `Work` API so the work controller will sync status fields based on the `WorkManifestConfig` back to the `Work` CR.
+
+When the work controller reconciles the `Work` CR, it will try to find a `WorkManifestConfig` for each manifest workload it contains.
+If there exists a `WorkManifestConfig` for a manifest then use that configuration for the resource status sync rules.
+If there is no `WorkManifestConfig` for a manifest then do not perform status sync on the resource.
 
 ### Design Details
 
-#### API change  
+#### API change
 
-Add and update the follow:
+Add a new cluster scoped `WorkManifestConfig` API to define the workload manifest status sync configuration.
 
 ```go
-// WorkSpec defines the desired state of Work
-type WorkSpec struct {
-  ...
-	// WorkloadConfig represents the configuration of workload defined in workload field.
-	// +optional
-	WorkloadConfig WorkloadConfiguration `json:"workloadConfig,omitempty"`
+// +genclient
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+
+// WorkManifestConfig represents the configuration of a workload manifest.
+// This resource allows the user to customize the configuration of a manifest inside a Work object.
+// WorkManifestConfig is a cluster-scoped resource.
+type WorkManifestConfig struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	// Spec defines the configuration for a workload manifest.
+	// +required
+	Spec WorkManifestConfigSpec `json:"spec"`
 }
 
-// WorkloadConfiguration represents the the configuration of workload defined in workload field.
-type WorkloadConfiguration struct {
-	// ManifestConfigs represents the configuration of manifest defined in workload field.
+// WorkManifestConfigSpec provides information for the WorkManifestConfig
+type WorkManifestConfigSpec struct {
+	// ManifestGVK represents the type of manifest this configuration is for
+	// +required
+	ManifestGVK ManifestGVK `json:"manifestGVK,omitempty"`
+
+	// ResourceStatusSyncConfiguration represents the configuration of workload manifest status sync.
 	// +optional
-	ManifestConfigs []ManifestConfigOption `json:"manifestConfigs,omitempty"`
+	ResourceStatusSyncConfig ResourceStatusSyncConfiguration `json:"resourceStatusSync,omitempty"`
 }
 
-// ManifestConfigOption represents the configuration of a manifest defined in workload field.
-type ManifestConfigOption struct {
-	// ResourceIdentifier represents the group, resource, name and namespace of a resoure.
-	// If this references a resource not created by this work,
-	// then the related configurations will not be applied.
-	// +kubebuilder:validation:Required
-	// +required
-	ResourceIdentifier ResourceIdentifier `json:"resourceIdentifier"`
+// ManifestGVK represents the type of manifest this configuration is for.
+type ManifestGVK struct {
+	// Group is the group of the workload resource manifest.
+	Group string `json:"group"`
 
-	// StatusSyncRules defines what resource status field should be returned.
-	// +kubebuilder:validation:Required
-	// +required
-	StatusSyncRules []StatusSyncRule `json:"statusSyncRules"`
+	// Version is the version of the workload resource manifest.
+	Version string `json:"version"`
+
+	// Kind is the kind of the workload resource manifest.
+	Kind string `json:"kind"`
+}
+
+// ResourceStatusSyncConfiguration represents the resource status sync configuration of a workload manifest.
+type ResourceStatusSyncConfiguration struct {
+	// StatusSyncRule defines what resource status field should be returned.
+	// +optional
+	Rules []StatusSyncRule `json:"rules"`
+
+	// FrequencySeconds represents how often (in seconds) to perform the probe.
+	// Default to 60 seconds. Minimum value is 1.
+	// +optional
+	FrequencySeconds int32 `json:"frequencySeconds,omitempty"`
+
+	// StopSyncThreshold represents minimum consecutive probe before stopping the sync.
+	// Defaults to 0. Minimum value is 0. The value 0 represents never stop syncing.
+	// +optional
+	StopSyncThreshold int32 `json:"stopThreshold,omitempty"`
 }
 
 // StatusSyncRule represents a resource status field should be returned.
 type StatusSyncRule struct {
 	// Type defines the option of how status can be returned.
-	// It can be JSONPaths or CommonFields.
-	// If the type is JSONPaths, user should specify the jsonPaths field
-	// If the type is CommonFields, certain common fields of status defined by a rule only
-	// for types in in k8s.io/api will be reported,
-	// If these status fields do not exist, no values will be reported.
+	// It can be JSONPaths or Scripts.
+	// If the type is JSONPaths, user should specify the jsonPaths field.
+	// If the type is Scripts, user should specify the scripts field.
 	// +kubebuilder:validation:Required
 	// +required
 	Type SyncType `json:"type"`
@@ -89,20 +121,24 @@ type StatusSyncRule struct {
 	// JsonPaths defines the json path under status field to be synced.
 	// +optional
 	JsonPaths []JsonPath `json:"jsonPaths,omitempty"`
+
+	// Scripts defines the script evaluation under status field to be synced.
+	// +optional
+	Scripts []Script `json:"scripts,omitempty"`
 }
 
 // SyncType represents the option of how status can be returned.
-// +kubebuilder:validation:Enum=CommonFields;JSONPaths
+// +kubebuilder:validation:Enum=JSONPaths;Scripts
 type SyncType string
 
 const (
-	// CommonFieldsType represents that values of some common status fields will be returned, which
-	// is reflected with a hardcoded rule only for types in k8s.io/api.
-	CommonFieldsType SyncType = "CommonFields"
-
 	// JSONPathsType represents that values of status fields with certain json paths specified will be
 	// returned
 	JSONPathsType SyncType = "JSONPaths"
+
+	// ScriptsType represents that values of status fields with certain scripts specified will be
+	// returned
+	ScriptsType SyncType = "Scripts"
 )
 
 // JsonPath represents a status field to be synced for a manifest using json path.
@@ -128,63 +164,74 @@ type JsonPath struct {
 	// +required
 	Path string `json:"path"`
 }
+
+// Script represents a status field to be synced for a manifest using a scripting language evaluation.
+type Script struct {
+	// Name represents the alias name for this field
+	// +kubebuilder:validation:Required
+	// +required
+	Name string `json:"name"`
+
+	// Language represents the language of the script.
+	// +kubebuilder:validation:Required
+	// +required
+	Language string `json:"language"`
+
+	// Content represents the script that will be evaluated against the workload resource status field.
+	// +kubebuilder:validation:Required
+	// +required
+	Content string `json:"content"`
+}
+
+// +kubebuilder:object:root=true
+
+// WorkManifestConfigList contains a list of WorkManifestConfigs
+type WorkManifestConfigList struct {
+	metav1.TypeMeta `json:",inline"`
+	// Standard list metadata.
+	// +optional
+	metav1.ListMeta `json:"metadata,omitempty"`
+	// List of workManifestConfigs.
+	// +listType=set
+	Items []WorkManifestConfig `json:"items"`
+}
 ```
 
-An example of `Work` CR to deploy a deployment and sync rules to return resource status data for:
+An example of `WorkManifestConfig` to define a deployment manifest sync rules to return resource status data for:
 - `isAvailable` value using`JSONPaths` sync rule type with custom json path.
-- `ReadyReplicas`, `Replicas`, and `AvailableReplicas` values using `CommonFields` pre-defined sync rule type.
+- `isReady` value using `Scripts` sync rule type with CEL scripting.
+The frequency of sync is 60 seconds and the stop threshold is 0 meaning it will continuously sync forever.
 
 ```yaml
 apiVersion: multicluster.x-k8s.io/v1alpha1
-kind: Work
+kind: WorkManifestConfig
 metadata:
-  name: test-work
-  namespace: default
+  name: apps-v1-deployment # prefer naming scheme
 spec:
-  workload:
-    manifests:
-    - apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: test-nginx
-        namespace: default
-      spec:
-        replicas: 2
-        selector:
-          matchLabels:
-            app: test-nginx
-        strategy: {}
-        template:
-          metadata:
-            creationTimestamp: null
-            labels:
-              app: test-nginx
-          spec:
-            containers:
-            - image: nginx:1.14.2
-              name: nginx
-              ports:
-              - containerPort: 80
-              resources: {}
-  workloadConfig:
-    manifestConfigs:
-      - resourceIdentifier:
-          group: apps
-          kind: Deployment
-          version: v1
-        statusSyncRules:
-        - type: CommonFields
-        - type: JSONPaths
-          jsonPaths:
-          - name: isAvailable
-            path: '.status.conditions[?(@.type=="Available")].status'
+  manifestGVK:
+    group: apps
+    version: v1
+    kind: Deployment
+  resourceStatusSync:
+    stopThreshold: 0
+    frequencySeconds: 60
+    rules:
+    - type: JSONPaths
+      jsonPaths:
+      - name: isAvailable
+        path: '.status.conditions[?(@.type=="Available")].status'
+    - type: Scripts
+      scripts:
+      - name: isReady
+        language: CEL
+        content: 'size(readyReplicas) > 0'
 ```
 
-The status of `Work` will be updated to include:
+Update the existing `Work` status API with the following:
 
 ```go
-// ManifestCondition represents the conditions of the resources deployed on a
-// managed cluster.
+// ManifestCondition represents the conditions of the resources deployed on
+// managed cluster
 type ManifestCondition struct {
 ...
 	// StatusSync represents the values of the field synced back defined in statusSyncRules
@@ -210,16 +257,16 @@ type SyncValue struct {
 	Name string `json:"name"`
 
 	// Value is the value of the status field.
-	// The value of the status field can only be integer, string or boolean.
+	// The value of the status field can only be integer, string, boolean or byte array.
 	// +kubebuilder:validation:Required
 	// +required
 	Value FieldValue `json:"fieldValue"`
 }
 
 // FieldValues represents the value of the field
-// The value of the status field can only be integer, string or boolean.
+// The value of the status field can only be integer, string, boolean or byte array.
 type FieldValue struct {
-	// Type represents the type of the value, it can be integer, string or boolean.
+	// Type represents the type of the value, it can be integer, string, boolean or byte array.
 	// +kubebuilder:validation:Required
 	// +required
 	Type ValueType `json:"type"`
@@ -235,6 +282,10 @@ type FieldValue struct {
 	// Boolean is bool value when type is boolean.
 	// +optional
 	Boolean *bool `json:"boolean,omitempty"`
+
+	// ByteArray is byte array value when type is byte array.
+	// +optional
+	ByteArray *[]byte `json:"byteArray,omitempty"`
 }
 
 // Type represents the type of the value, it can by integer, string or bool
@@ -242,9 +293,10 @@ type FieldValue struct {
 type ValueType string
 
 const (
-	Integer ValueType = "Integer"
-	String  ValueType = "String"
-	Boolean ValueType = "Boolean"
+	Integer   ValueType = "Integer"
+	String    ValueType = "String"
+	Boolean   ValueType = "Boolean"
+	ByteArray ValueType = "ByteArray"
 )
 ```
 
@@ -279,30 +331,20 @@ An example of a return applied workload resource sync status by the work control
     statusSync:
       values:
       - fieldValue:
-          integer: 2
-          type: Integer
-        name: ReadyReplicas
-      - fieldValue:
-          integer: 2
-          type: Integer
-        name: Replicas
-      - fieldValue:
-          integer: 2
-          type: Integer
-        name: AvailableReplicas
-      - fieldValue:
           string: "True"
           type: String
         name: isAvailable
+      - fieldValue:
+          boolean: true
+          type: Boolean
+        name: isReady
 ```
 
-The returned value must be a scalar value, and the work controller should check the type of the returned value. The work controller should treat the status of a value "IsNotFound" or "TypeMismatch" separately. If the path of the `syncValue` is not found in the status of the resource, then the value should be ignored. If the path of the `syncValue` is valid, but the type of the value is not scalar, e.g a list or map, the condition of "StatusSyncAvailable" should be set false and a message should be added to indicate that which `syncValue` cannot be obtained.
-
-#### Status update frequency
-
-Ideally, the work controller should have an informer for each applied resource to update the `syncValue`, but this will cause the controller to manage too many informers and will also result in frequent updates on status of `Work`.
-To compromise, we will start with a periodic update. User can specify the update frequency of `syncValues` by setting a
-`--status-update-frequency` flag on the work controller. we should consider making it configurable for different resources in the API spec in the future.
+The returned value should be a scalar value, and the work controller should check the type of the returned value. 
+The work controller should treat the status of a value "IsNotFound" or "TypeMismatch" separately. 
+If the path of the `syncValue` is not found in the status of the resource, then the value should be ignored. 
+If the path of the `syncValue` is valid, but the type of the value is not scalar, e.g a list or map, then fall back to using byte array
+to capture the status data.
 
 ### Test Plan
 
@@ -315,7 +357,8 @@ E2E tests will be added to cover cases including:
 N/A
 
 ### Upgrade Strategy
-It will need an upgrade on `Work` CRD on the hub cluster, and upgrade of the work controller on managed cluster.
+It will need to apply the new `WorkManifestConfig` CRD, upgrade the `Work` CRD on the hub cluster,
+and upgrade of the work controller on managed cluster.
 
 ### Version Skew Strategy
 - The `StatusSync` field is optional, and if it is not set, the `Work` CR can be correctly treated by the work controller with the older version.
