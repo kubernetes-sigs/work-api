@@ -36,8 +36,6 @@ var (
 	ownerRef          = metav1.OwnerReference{
 		APIVersion: workv1alpha1.GroupVersion.String(),
 		Kind:       appliedWork.Kind,
-		Name:       appliedWork.GetName(),
-		UID:        appliedWork.GetUID(),
 	}
 	testGvr = schema.GroupVersionResource{
 		Group:    "apps",
@@ -84,7 +82,7 @@ func (m testMapper) RESTMapping(gk schema.GroupKind, versions ...string) (*meta.
 
 func TestApplyManifest(t *testing.T) {
 	// Manifests
-	rawInvalidResource, _ := json.Marshal([]byte(getRandomString()))
+	rawInvalidResource, _ := json.Marshal([]byte(rand.String(10)))
 	rawMissingResource, _ := json.Marshal(
 		v1.Pod{
 			TypeMeta: metav1.TypeMeta{
@@ -193,9 +191,9 @@ func TestApplyManifest(t *testing.T) {
 }
 
 func TestReconcile(t *testing.T) {
-	workNamespace := getRandomString()
-	workName := getRandomString()
-	appliedWorkName := getRandomString()
+	workNamespace := rand.String(10)
+	workName := rand.String(10)
+	appliedWorkName := rand.String(10)
 	req := ctrl.Request{
 		NamespacedName: types.NamespacedName{
 			Namespace: workNamespace,
@@ -204,8 +202,8 @@ func TestReconcile(t *testing.T) {
 	}
 	wrongReq := ctrl.Request{
 		NamespacedName: types.NamespacedName{
-			Namespace: getRandomString(),
-			Name:      getRandomString(),
+			Namespace: rand.String(10),
+			Name:      rand.String(10),
 		},
 	}
 	invalidReq := ctrl.Request{
@@ -462,8 +460,4 @@ func createObjAndDynamicClient(rawManifest []byte) (unstructured.Unstructured, d
 		return true, unstructuredObj, nil
 	})
 	return *unstructuredObj, dynamicClient, validSpecHash
-}
-
-func getRandomString() string {
-	return rand.String(10)
 }
