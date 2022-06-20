@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -185,6 +186,170 @@ func TestApplyManifest(t *testing.T) {
 				}
 				assert.Equalf(t, testCase.generation, result.generation, "Testcase %s: generation incorrect", testName)
 				assert.Equalf(t, testCase.updated, result.updated, "Testcase %s: Updated boolean incorrect", testName)
+			}
+		})
+	}
+}
+
+func TestApplyUnstructured(t *testing.T) {
+	correctObj, correctDynamicClient, correctSpecHash := createObjAndDynamicClient(testManifest.Raw)
+
+	testDeploymentDiffSpec := testDeployment.DeepCopy()
+	testDeploymentDiffSpec.Spec.MinReadySeconds = 0
+	rawDiffSpec, _ := json.Marshal(testDeploymentDiffSpec)
+	testManifestDiffSpec := workv1alpha1.Manifest{RawExtension: runtime.RawExtension{
+		Raw: rawDiffSpec,
+	}}
+	diffSpecObj, diffSpecDynamicClient, diffSpecHash := createObjAndDynamicClient(testManifestDiffSpec.Raw)
+
+	patchFailClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
+	patchFailClient.PrependReactor("patch", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+		return true, nil, errors.New("patch failed")
+	})
+	patchFailClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+		return true, diffSpecObj.DeepCopy(), nil
+	})
+
+	dynamicClientNotFound := fake.NewSimpleDynamicClient(runtime.NewScheme())
+	dynamicClientNotFound.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+		return false,
+			nil,
+			&apierrors.StatusError{
+				ErrStatus: metav1.Status{
+					Status: metav1.StatusFailure,
+					Reason: metav1.StatusReasonNotFound,
+				}}
+	})
+
+	dynamicClientError := fake.NewSimpleDynamicClient(runtime.NewScheme())
+	dynamicClientError.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+		return true,
+			nil,
+			errors.New("client error")
+	})
+
+	testDeploymentWithDifferentOwner := appsv1.Deployment{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Deployment",
+			APIVersion: "apps/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "Deployment",
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: rand.String(10),
+					Kind:       rand.String(10),
+					Name:       rand.String(10),
+					UID:        types.UID(rand.String(10)),
+				},
+			},
+		},
+	}
+	rawTestDeploymentWithDifferentOwner, _ := json.Marshal(testDeploymentWithDifferentOwner)
+	_, diffOwnerDynamicClient, _ := createObjAndDynamicClient(rawTestDeploymentWithDifferentOwner)
+
+	specHashFailObj := correctObj.DeepCopy()
+	specHashFailObj.Object["test"] = math.Inf(1)
+
+	testCases := map[string]struct {
+		reconciler     ApplyWorkReconciler
+		workObj        *unstructured.Unstructured
+		resultSpecHash string
+		resultBool     bool
+		resultErr      error
+	}{
+		"error during SpecHash Generation / fail": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: fakeDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+			},
+			workObj:    specHashFailObj,
+			resultBool: false,
+			resultErr:  errors.New("unsupported value"),
+		},
+		"not found error looking for object / success due to creation": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: dynamicClientNotFound,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+			},
+			workObj:        correctObj.DeepCopy(),
+			resultSpecHash: correctSpecHash,
+			resultBool:     true,
+			resultErr:      nil,
+		},
+		"client error looking for object / fail": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: dynamicClientError,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+			},
+			workObj:    correctObj.DeepCopy(),
+			resultBool: false,
+			resultErr:  errors.New("client error"),
+		},
+		"owner reference comparison failure / fail": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: diffOwnerDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+			},
+			workObj:    correctObj.DeepCopy(),
+			resultBool: false,
+			resultErr:  errors.New("object apps/v1, Resource=Deployment:Deployment is not owned by the work-api anymore"),
+		},
+		"equal spec hash of current vs work object / succeed without updates": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: correctDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+			},
+			workObj:        correctObj.DeepCopy(),
+			resultSpecHash: correctSpecHash,
+			resultBool:     false,
+			resultErr:      nil,
+		},
+		"unequal spec hash of current vs work object / client patch fail": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: patchFailClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+			},
+			workObj:    correctObj.DeepCopy(),
+			resultBool: false,
+			resultErr:  errors.New("patch failed"),
+		},
+		"happy path - with updates": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: diffSpecDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+			},
+			workObj:        &correctObj,
+			resultSpecHash: diffSpecHash,
+			resultBool:     true,
+			resultErr:      nil,
+		},
+	}
+
+	for testName, testCase := range testCases {
+		t.Run(testName, func(t *testing.T) {
+			applyResult, applyResultBool, err := testCase.reconciler.applyUnstructured(context.Background(), testGvr, testCase.workObj)
+			assert.Equalf(t, testCase.resultBool, applyResultBool, "updated boolean not matching for Testcase %s", testName)
+			if testCase.resultErr != nil {
+				assert.Containsf(t, err.Error(), testCase.resultErr.Error(), "error not matching for Testcase %s", testName)
+			} else {
+				assert.Equalf(t, testCase.resultSpecHash, applyResult.GetAnnotations()["multicluster.x-k8s.io/spec-hash"],
+					"specHash not matching for Testcase %s", testName)
+				assert.Equalf(t, ownerRef, applyResult.GetOwnerReferences()[0], "ownerRef not matching for Testcase %s", testName)
 			}
 		})
 	}
