@@ -1,26 +1,32 @@
 replicaCount: 1
 
+## @param global namespace for caravel work-api resources
+global:
+  namespace: "fleet-system"
+
+## @param image.registry caravel controller image registry
+## @param image.repository caravel controller image repository
+## @param image.tag caravel controller image tag
+## @param image.pullPolicy caravel controller image pull policy
 image:
-  repository: registryUrl/repository
+  registry: container.registry.url
+  repository: repository-name
+  tag: "latest"
   pullPolicy: Always
-  tag: "tag version"
 
-imagePullSecrets: []
-nameOverride: ""
-fullnameOverride: ""
-
+## @param serviceAccount.create work-api helm chart service account setup boolean
+## @param serviceAccount.name work-api helm chart service account name
 serviceAccount:
   create: true
-  annotations: {}
   name: "work-controller-sa"
 
+## @param podAnnotation.prometheus.io prometheus setup configuration
 podAnnotations: {
   prometheus.io/scrape: "true",
   prometheus.io/path: "/metrics",
   prometheus.io/port: "8080"
 }
 
-podSecurityContext: {}
 
 securityContext: {
     allowPrivilegeEscalation: false,
@@ -32,31 +38,11 @@ securityContext: {
     privileged : false
 }
 
+## @param service.type caravel image controller service type
+## @param service.port caravel image controller service port
 service:
   type: ClusterIP
   port: 8080
 
-ingress:
-  enabled: false
-  className: ""
-  annotations: {}
-  hosts:
-    - host: chart-example.local
-      paths:
-        - path: /
-          pathType: ImplementationSpecific
-  tls: []
-
-resources: {}
-
-autoscaling:
-  enabled: false
-  minReplicas: 1
-  maxReplicas: 100
-  targetCPUUtilizationPercentage: 80
-
-nodeSelector: {}
-
-tolerations: []
-
-affinity: {}
+## @param kubeconfig base64 encoded hub-cluster kubeconfig
+kubeconfig: XXXXXXXXXXXXXXXX
