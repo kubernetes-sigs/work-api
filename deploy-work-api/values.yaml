@@ -1,13 +1,13 @@
 replicaCount: 1
 
-## @param global namespace for caravel work-api resources
+## @param global namespace for fleet work-api resources
 global:
   namespace: "fleet-system"
 
-## @param image.registry caravel controller image registry
-## @param image.repository caravel controller image repository
-## @param image.tag caravel controller image tag
-## @param image.pullPolicy caravel controller image pull policy
+## @param image.registry fleet controller image registry
+## @param image.repository fleet controller image repository
+## @param image.tag fleet controller image tag
+## @param image.pullPolicy fleet controller image pull policy
 image:
   registry: container.registry.url
   repository: repository-name
@@ -38,8 +38,8 @@ securityContext: {
     privileged : false
 }
 
-## @param service.type caravel image controller service type
-## @param service.port caravel image controller service port
+## @param service.type fleet image controller service type
+## @param service.port fleet image controller service port
 service:
   type: ClusterIP
   port: 8080

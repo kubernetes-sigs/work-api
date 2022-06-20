@@ -1,6 +1,6 @@
-# Caravel Work-API
+# Fleet Work-API
 
-Caravel Work-API is a Work-management system that enables Work management across multiple Kubernetes clusters, with key features such as creation and garbage collection of work resources in a multi-cluster environment.
+Fleet Work-API is a Work-management system that enables Work management across multiple Kubernetes clusters, with key features such as creation and garbage collection of work resources in a multi-cluster environment.
 
 ## TL;DR
 
