@@ -7,9 +7,9 @@ global:
 ## @param image.tag fleet controller image tag
 ## @param image.pullPolicy fleet controller image pull policy
 image:
-  registry: promdemo.azurecr.io
-  repository: workapicontroller
-  tag: "v2"
+  registry: ghcr.io
+  repository: Azure/k8s-work-api
+  tag: "master"
   pullPolicy: Always
 
 ## @param replicaCount count of the replicas for the controller deployment
