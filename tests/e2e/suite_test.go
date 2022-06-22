@@ -44,6 +44,8 @@ var (
 	spokeKubeClient    kubernetes.Interface
 	spokeDynamicClient dynamic.Interface
 
+	spokeWorkClient    workclientset.Interface
+
 	//go:embed testmanifests
 	testManifestFiles embed.FS
 
@@ -84,6 +86,9 @@ var _ = ginkgo.BeforeSuite(func() {
 	spokeKubeClient, err = kubernetes.NewForConfig(restConfig)
 	gomega.Expect(err).ToNot(gomega.HaveOccurred())
 
-	spokeDynamicClient, err = dynamic.NewForConfig(restConfig)
+    spokeDynamicClient, err = dynamic.NewForConfig(restConfig)
+	gomega.Expect(err).ToNot(gomega.HaveOccurred())
+    
+	spokeWorkClient, err = workclientset.NewForConfig(restConfig)
 	gomega.Expect(err).ToNot(gomega.HaveOccurred())
 })
