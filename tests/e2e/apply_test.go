@@ -34,35 +34,13 @@ const (
 )
 
 var _ = ginkgo.Describe("Apply Work", func() {
-
-	workName := "work-" + utilrand.String(5)
-	workNamespace = "default"
-
 	ginkgo.Context("Create a service and deployment", func() {
 		ginkgo.It("Should create work successfully", func() {
-
-			manifestFiles := []string{
-				"testmanifests/test-deployment.yaml",
-				"testmanifests/test-service.yaml",
-			}
-
-			work := &workapi.Work{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      workName,
-					Namespace: workNamespace,
-				},
-				Spec: workapi.WorkSpec{
-					Workload: workapi.WorkloadTemplate{
-						Manifests: []workapi.Manifest{},
-					},
-				},
-			}
-
-			addManifestsToWorkSpec(manifestFiles, &work.Spec)
-
-			_, err := hubWorkClient.MulticlusterV1alpha1().Works(workNamespace).Create(context.Background(), work, metav1.CreateOptions{})
+			// Set
+			createdWork, err := createDefaultWork()
 			gomega.Expect(err).ToNot(gomega.HaveOccurred())
 
+			// Vet
 			gomega.Eventually(func() error {
 				_, err := spokeKubeClient.AppsV1().Deployments("default").Get(context.Background(), "test-nginx", metav1.GetOptions{})
 				if err != nil {
@@ -72,9 +50,8 @@ var _ = ginkgo.Describe("Apply Work", func() {
 				_, err = spokeKubeClient.CoreV1().Services("default").Get(context.Background(), "test-nginx", metav1.GetOptions{})
 				return err
 			}, eventuallyTimeout, eventuallyInterval).ShouldNot(gomega.HaveOccurred())
-
 			gomega.Eventually(func() error {
-				work, err := hubWorkClient.MulticlusterV1alpha1().Works(workNamespace).Get(context.Background(), workName, metav1.GetOptions{})
+				work, err := hubWorkClient.MulticlusterV1alpha1().Works(createdWork.Namespace).Get(context.Background(), createdWork.Name, metav1.GetOptions{})
 				if err != nil {
 					return err
 				}
@@ -85,25 +62,31 @@ var _ = ginkgo.Describe("Apply Work", func() {
 
 				return nil
 			}, eventuallyTimeout, eventuallyInterval).ShouldNot(gomega.HaveOccurred())
+
+			// Reset
+			deleteWork(createdWork)
 		})
-	})
-	ginkgo.Context("Add a manifest to an existing work", func() {
+
 		ginkgo.It("Should create new resources successfully.", func() {
-			manifestFiles := []string{
+			// Set
+			createdWork, err := createDefaultWork()
+			gomega.Expect(err).ToNot(gomega.HaveOccurred())
+
+			newManifestFiles := []string{
 				"testmanifests/test-deployment2.yaml",
 				"testmanifests/test-service2.yaml",
 			}
 
-			// Get existing work, then add the new manifests
-			work, err := hubWorkClient.MulticlusterV1alpha1().Works(workNamespace).Get(context.Background(), workName, metav1.GetOptions{})
+			work, err := hubWorkClient.MulticlusterV1alpha1().Works(createdWork.Namespace).Get(context.Background(), createdWork.Name, metav1.GetOptions{})
 			gomega.Expect(err).ToNot(gomega.HaveOccurred())
 			gomega.Expect(work).ToNot(gomega.BeNil())
 
-			addManifestsToWorkSpec(manifestFiles, &work.Spec)
+			addManifestsToWorkSpec(newManifestFiles, &work.Spec)
 
-			_, err = hubWorkClient.MulticlusterV1alpha1().Works(workNamespace).Update(context.Background(), work, metav1.UpdateOptions{})
+			_, err = hubWorkClient.MulticlusterV1alpha1().Works(work.Namespace).Update(context.Background(), work, metav1.UpdateOptions{})
 			gomega.Expect(err).ToNot(gomega.HaveOccurred())
 
+			// Vet
 			gomega.Eventually(func() error {
 				_, err := spokeKubeClient.AppsV1().Deployments("default").Get(context.Background(), "test-nginx2", metav1.GetOptions{})
 				if err != nil {
@@ -113,9 +96,8 @@ var _ = ginkgo.Describe("Apply Work", func() {
 				_, err = spokeKubeClient.CoreV1().Services("default").Get(context.Background(), "test-nginx2", metav1.GetOptions{})
 				return err
 			}, eventuallyTimeout, eventuallyInterval).ShouldNot(gomega.HaveOccurred())
-
 			gomega.Eventually(func() error {
-				work, err := hubWorkClient.MulticlusterV1alpha1().Works(workNamespace).Get(context.Background(), workName, metav1.GetOptions{})
+				work, err := hubWorkClient.MulticlusterV1alpha1().Works(work.Namespace).Get(context.Background(), work.Name, metav1.GetOptions{})
 				if err != nil {
 					return err
 				}
@@ -126,9 +108,43 @@ var _ = ginkgo.Describe("Apply Work", func() {
 
 				return nil
 			}, eventuallyTimeout, eventuallyInterval).ShouldNot(gomega.HaveOccurred())
+
+			// Reset
+			deleteWork(work)
 		})
 	})
 })
+
+func createDefaultWork() (*workapi.Work, error) {
+	workName := "work-" + utilrand.String(5)
+	workNamespace := "default"
+
+	manifestFiles := []string{
+		"testmanifests/test-deployment.yaml",
+		"testmanifests/test-service.yaml",
+	}
+
+	work := &workapi.Work{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      workName,
+			Namespace: workNamespace,
+		},
+		Spec: workapi.WorkSpec{
+			Workload: workapi.WorkloadTemplate{
+				Manifests: []workapi.Manifest{},
+			},
+		},
+	}
+
+	addManifestsToWorkSpec(manifestFiles, &work.Spec)
+	createdWork, err := hubWorkClient.MulticlusterV1alpha1().Works(work.Namespace).Create(context.Background(), work, metav1.CreateOptions{})
+	return createdWork, err
+}
+
+func deleteWork(work *workapi.Work) {
+	err := hubWorkClient.MulticlusterV1alpha1().Works(work.Namespace).Delete(context.Background(), work.Name, metav1.DeleteOptions{})
+	gomega.Expect(err).ShouldNot(gomega.HaveOccurred())
+}
 
 func addManifestsToWorkSpec(manifestFileRelativePaths []string, workSpec *workapi.WorkSpec) {
 	for _, file := range manifestFileRelativePaths {
