@@ -18,18 +18,17 @@ package e2e
 
 import (
 	"context"
-	"fmt"
-	"github.com/onsi/ginkgo"
-	"github.com/onsi/gomega"
+	"time"
+
+	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/json"
 	utilrand "k8s.io/apimachinery/pkg/util/rand"
 	workapi "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
-	"time"
 )
 
 const (
@@ -37,213 +36,241 @@ const (
 	eventuallyInterval = 1  // seconds
 )
 
-var _ = ginkgo.Describe("Apply Work", func() {
-	defaultManifestFiles := []string{
-		"testmanifests/test-deployment.yaml",
-		"testmanifests/test-service.yaml",
+var (
+	appliedWork            *workapi.AppliedWork
+	createdWork            *workapi.Work
+	createError            error
+	deleteError            error
+	getError               error
+	updateError            error
+	manifests              []string
+	manifestMetaName       []string
+	manifestMetaNamespaces []string
+	workName               string
+	workNamespace          string
+
+	_ = Describe("Work", func() {
+		manifestMetaName = []string{"test-nginx", "test-nginx", "test-configmap"} //Todo - Unmarshal raw file bytes into JSON, extract key / values programmatically.
+		manifestMetaNamespaces = []string{"default", "default", "default"}        //Todo - Unmarshal raw file bytes into JSON, extract key / values programmatically.
+
+		// The Manifests' ordinal must be respected; some tests reference by ordinal.
+		manifests = []string{
+			"testmanifests/test-deployment.yaml",
+			"testmanifests/test-service.yaml",
+			"testmanifests/test-configmap.yaml",
+		}
+
+		BeforeEach(func() {
+			workName = "work-" + utilrand.String(5)
+			workNamespace = "default"
+
+			createdWork, createError = createWork(workName, workNamespace, manifests)
+			Expect(createError).ToNot(HaveOccurred())
+		})
+
+		AfterEach(func() {
+			deleteError = safeDeleteWork(createdWork)
+		})
+
+		Describe("created on the Hub", func() {
+			// Todo - It would be better to have context of N manifest, and let the type be programmatically determined.
+			Context("with a Service & Deployment & Configmap manifest", func() {
+				It("should have a Work resource in the hub", func() {
+					Eventually(func() error {
+						_, err := retrieveWork(createdWork.Namespace, createdWork.Name)
+
+						return err
+					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+				})
+				It("should have an AppliedWork resource in the spoke ", func() {
+					Eventually(func() error {
+						_, err := spokeWorkClient.MulticlusterV1alpha1().AppliedWorks().Get(context.Background(), createdWork.Name, metav1.GetOptions{})
+
+						return err
+					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+				})
+				It("should have created a Kubernetes deployment", func() {
+					Eventually(func() error {
+						_, err := spokeKubeClient.AppsV1().Deployments(manifestMetaNamespaces[0]).Get(context.Background(), manifestMetaName[0], metav1.GetOptions{})
+
+						return err
+					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+				})
+				It("should have created a Kubernetes service", func() {
+					Eventually(func() error {
+						_, err := spokeKubeClient.CoreV1().Services(manifestMetaNamespaces[1]).Get(context.Background(), manifestMetaName[1], metav1.GetOptions{})
+
+						return err
+					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+				})
+				It("should have created a ConfigMap", func() {
+					Eventually(func() error {
+						_, err := spokeKubeClient.CoreV1().ConfigMaps(manifestMetaNamespaces[2]).Get(context.Background(), manifestMetaName[2], metav1.GetOptions{})
+
+						return err
+					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+				})
+			})
+		})
+
+		Describe("updated on the Hub", func() {
+			Context("with a new manifest", func() {
+				// Create then namespace for which the new manifest will be created within.
+				// Todo - utilize Work to ensure is applied.
+				namespace := &v1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "test-namespace",
+					},
+				}
+				manifests = append(manifests, "testmanifests/test-configmap2.yaml")
+				manifestMetaName = append(manifestMetaName, "test-configmap")
+				manifestMetaNamespaces = append(manifestMetaNamespaces, namespace.Name)
+
+				BeforeEach(func() {
+					var work *workapi.Work
+					var err error
+
+					By("ensuring the namespace specified within the manifest already exists on the spoke")
+					Eventually(func() error {
+						_, err = spokeKubeClient.CoreV1().Namespaces().Create(context.Background(), namespace, metav1.CreateOptions{})
+						return err
+					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+
+					By("getting the existing Work resource on the hub")
+					Eventually(func() error {
+						work, err = retrieveWork(createdWork.Namespace, createdWork.Name)
+						return err
+					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+
+					By("adding the new manifest to the Work resource and updating it on the hub")
+					Eventually(func() error {
+						addManifestsToWorkSpec([]string{manifests[2]}, &work.Spec)
+						_, err = updateWork(work)
+						return err
+					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+				})
+				AfterEach(func() {
+					Eventually(func() error {
+						return spokeKubeClient.CoreV1().Namespaces().Delete(context.Background(), namespace.Name, metav1.DeleteOptions{})
+					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+				})
+
+				It("should have applied the added manifest", func() {
+					Eventually(func() error {
+						_, err := spokeKubeClient.CoreV1().ConfigMaps(manifestMetaNamespaces[3]).Get(context.Background(), manifestMetaName[3], metav1.GetOptions{})
+
+						return err
+					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+				})
+			})
+			Context("with a modified manifest", func() {
+				// Todo, refactor this context to not use "over complicated structure".
+				var cm v1.ConfigMap
+				var newDataKey string
+				var newDataValue string
+				var configMapName string
+				var configMapNamespace string
+
+				BeforeEach(func() {
+					configManifest := createdWork.Spec.Workload.Manifests[2]
+					// Unmarshal the data into a struct, modify and then update it.
+					err := json.Unmarshal(configManifest.Raw, &cm)
+					Expect(err).ToNot(HaveOccurred())
+					configMapName = cm.Name
+					configMapNamespace = cm.Namespace
+
+					// Add random new key value pair into map.
+					newDataKey = utilrand.String(5)
+					newDataValue = utilrand.String(5)
+					cm.Data[newDataKey] = newDataValue
+					rawManifest, err := json.Marshal(cm)
+					Expect(err).ToNot(HaveOccurred())
+					updatedManifest := workapi.Manifest{}
+					updatedManifest.Raw = rawManifest
+					createdWork.Spec.Workload.Manifests[2] = updatedManifest
+
+					By("updating a manifest specification within the existing Work on the hub")
+					createdWork, updateError = updateWork(createdWork)
+					Expect(updateError).ToNot(HaveOccurred())
+				})
+
+				It("should reapply the manifest.", func() {
+					Eventually(func() bool {
+						configMap, err := spokeKubeClient.CoreV1().ConfigMaps(configMapNamespace).Get(context.Background(), configMapName, metav1.GetOptions{})
+						Expect(err).ToNot(HaveOccurred())
+
+						return configMap.Data[newDataKey] == newDataValue
+					}, eventuallyTimeout, eventuallyInterval).Should(BeTrue())
+				})
+			})
+		})
+
+		Describe("deleted from the Hub", func() {
+			BeforeEach(func() {
+				// Todo - Replace with Eventually.
+				time.Sleep(2 * time.Second) // Give time for AppliedWork to be created.
+				// Grab the AppliedWork, so resource garbage collection can be verified.
+				appliedWork, getError = retrieveAppliedWork(createdWork.Name)
+				Expect(getError).ToNot(HaveOccurred())
+
+				deleteError = safeDeleteWork(createdWork)
+				Expect(deleteError).ToNot(HaveOccurred())
+			})
+
+			It("should have deleted the Work resource on the hub", func() {
+				Eventually(func() error {
+					_, err := retrieveWork(workNamespace, workName)
+
+					return err
+				}, eventuallyTimeout, eventuallyInterval).Should(HaveOccurred())
+			})
+			It("should have deleted the resources from the spoke", func() {
+				Eventually(func() bool {
+					garbageCollectionComplete := true
+					for _, resourceMeta := range appliedWork.Status.AppliedResources {
+						gvr := schema.GroupVersionResource{
+							Group:    resourceMeta.Group,
+							Version:  resourceMeta.Version,
+							Resource: resourceMeta.Resource,
+						}
+						_, err := spokeDynamicClient.Resource(gvr).Get(context.Background(), resourceMeta.Name, metav1.GetOptions{})
+
+						if err == nil {
+							garbageCollectionComplete = false
+							break
+						}
+					}
+
+					return garbageCollectionComplete
+				}, eventuallyTimeout, eventuallyInterval).Should(BeTrue())
+			})
+			It("should have deleted the AppliedWork resource from the spoke", func() {
+				Eventually(func() error {
+					_, err := retrieveAppliedWork(createdWork.Name)
+
+					return err
+				}, eventuallyTimeout, eventuallyInterval).Should(HaveOccurred())
+			})
+		})
+
+	})
+)
+
+func addManifestsToWorkSpec(manifestFileRelativePaths []string, workSpec *workapi.WorkSpec) {
+	for _, file := range manifestFileRelativePaths {
+		fileRaw, err := testManifestFiles.ReadFile(file)
+		Expect(err).ToNot(HaveOccurred())
+
+		obj, _, err := genericCodec.Decode(fileRaw, nil, nil)
+		Expect(err).ToNot(HaveOccurred())
+
+		workSpec.Workload.Manifests = append(
+			workSpec.Workload.Manifests, workapi.Manifest{
+				RawExtension: runtime.RawExtension{Object: obj},
+			})
 	}
-
-	ginkgo.Context("Work created on the hub.", func() {
-		ginkgo.It("Should create work successfully.", func() {
-			// Set
-			createdWork, err := createWork(defaultManifestFiles)
-			gomega.Expect(err).ToNot(gomega.HaveOccurred())
-
-			// Vet
-			gomega.Eventually(func() error {
-				_, err := spokeKubeClient.AppsV1().Deployments("default").Get(context.Background(), "test-nginx", metav1.GetOptions{})
-				if err != nil {
-					return err
-				}
-
-				_, err = spokeKubeClient.CoreV1().Services("default").Get(context.Background(), "test-nginx", metav1.GetOptions{})
-				return err
-			}, eventuallyTimeout, eventuallyInterval).ShouldNot(gomega.HaveOccurred())
-			gomega.Eventually(func() error {
-				work, err := hubWorkClient.MulticlusterV1alpha1().Works(createdWork.Namespace).Get(context.Background(), createdWork.Name, metav1.GetOptions{})
-				if err != nil {
-					return err
-				}
-
-				if !meta.IsStatusConditionTrue(work.Status.Conditions, "Applied") {
-					return fmt.Errorf("Expect the applied contidion of the work is true")
-				}
-
-				return nil
-			}, eventuallyTimeout, eventuallyInterval).ShouldNot(gomega.HaveOccurred())
-
-			// Reset
-			err = deleteWork(createdWork)
-			gomega.Expect(err).ToNot(gomega.HaveOccurred())
-		})
-	})
-
-	ginkgo.Context("Work created on the hub, then a new manifest added to the existing Work resource.", func() {
-		ginkgo.It("Should create work initial resources, and then additional resources.", func() {
-			// Set
-			createdWork, err := createWork(defaultManifestFiles)
-			gomega.Expect(err).ToNot(gomega.HaveOccurred())
-
-			newManifestFiles := []string{
-				"testmanifests/test-deployment2.yaml",
-				"testmanifests/test-service2.yaml",
-			}
-
-			work, err := hubWorkClient.MulticlusterV1alpha1().Works(createdWork.Namespace).Get(context.Background(), createdWork.Name, metav1.GetOptions{})
-			gomega.Expect(err).ToNot(gomega.HaveOccurred())
-			gomega.Expect(work).ToNot(gomega.BeNil())
-
-			addManifestsToWorkSpec(newManifestFiles, &work.Spec)
-
-			_, err = hubWorkClient.MulticlusterV1alpha1().Works(work.Namespace).Update(context.Background(), work, metav1.UpdateOptions{})
-			gomega.Expect(err).ToNot(gomega.HaveOccurred())
-
-			// Vet
-			gomega.Eventually(func() error {
-				_, err := spokeKubeClient.AppsV1().Deployments("default").Get(context.Background(), "test-nginx2", metav1.GetOptions{})
-				if err != nil {
-					return err
-				}
-
-				_, err = spokeKubeClient.CoreV1().Services("default").Get(context.Background(), "test-nginx2", metav1.GetOptions{})
-				return err
-			}, eventuallyTimeout, eventuallyInterval).ShouldNot(gomega.HaveOccurred())
-			gomega.Eventually(func() error {
-				work, err := hubWorkClient.MulticlusterV1alpha1().Works(work.Namespace).Get(context.Background(), work.Name, metav1.GetOptions{})
-				if err != nil {
-					return err
-				}
-
-				if !meta.IsStatusConditionTrue(work.Status.Conditions, "Applied") {
-					return fmt.Errorf("Expect the applied contidion of the work is true")
-				}
-
-				return nil
-			}, eventuallyTimeout, eventuallyInterval).ShouldNot(gomega.HaveOccurred())
-
-			// Reset
-			err = deleteWork(createdWork)
-			gomega.Expect(err).ToNot(gomega.HaveOccurred())
-		})
-	})
-
-	ginkgo.Context("Work created on the hub, then deleted.", func() {
-		ginkgo.It("Should delete all resources on hub and spoke clusters.", func() {
-			// Set
-			createdWork, err := createWork(defaultManifestFiles)
-			gomega.Expect(err).ToNot(gomega.HaveOccurred())
-
-			// Get AppliedWork(s) so we can verify garbage collection.
-			var appliedWorks *workapi.AppliedWork
-			gomega.Eventually(func() error {
-				appliedWorks, err = spokeWorkClient.MulticlusterV1alpha1().AppliedWorks().Get(context.Background(), createdWork.Name, metav1.GetOptions{})
-				return err
-			}, eventuallyTimeout, eventuallyInterval).ShouldNot(gomega.HaveOccurred())
-
-			err = deleteWork(createdWork)
-			gomega.Expect(err).ToNot(gomega.HaveOccurred())
-
-			// Ensure the work resource was deleted from the Hub.
-			gomega.Eventually(func() error {
-				_, err = hubWorkClient.MulticlusterV1alpha1().Works(createdWork.Namespace).Get(context.Background(), createdWork.Name, metav1.GetOptions{})
-
-				return err
-			}, eventuallyTimeout, eventuallyInterval).Should(gomega.HaveOccurred())
-
-			// Ensure the AppliedWork resource was deleted from the spoke.
-			gomega.Eventually(func() error {
-				_, err = spokeWorkClient.MulticlusterV1alpha1().AppliedWorks().Get(context.Background(), createdWork.Name, metav1.GetOptions{})
-
-				return err
-			}, eventuallyTimeout, eventuallyInterval).Should(gomega.HaveOccurred())
-
-			// Ensure the resources are garbage collection on the spoke.
-			gomega.Eventually(func() bool {
-				garbageCollectionComplete := true
-				for _, resourceMeta := range appliedWorks.Status.AppliedResources {
-					gvr := schema.GroupVersionResource{
-						Group:    resourceMeta.Group,
-						Version:  resourceMeta.Version,
-						Resource: resourceMeta.Resource,
-					}
-					_, err := spokeDynamicClient.Resource(gvr).Get(context.Background(), resourceMeta.Name, metav1.GetOptions{})
-
-					// ToDo - Replace all HTTP calls with proper err code expectation.
-					if err == nil {
-						garbageCollectionComplete = false
-						break
-					}
-				}
-
-				return garbageCollectionComplete
-			}, eventuallyTimeout, eventuallyInterval).Should(gomega.BeTrue())
-		})
-	})
-	ginkgo.Context("Work created on the Hub, then a manifest is modified on the Hub.", func() {
-		ginkgo.It("Should reapply the manifest.", func() {
-			// Setup
-			configMapManifest := []string{
-				"testmanifests/test-configmap.yaml",
-			}
-
-			createdWork, err := createWork(configMapManifest)
-			gomega.Expect(err).ToNot(gomega.HaveOccurred())
-
-			// Retrieve the owner reference for the existing resource, then retrieve the work spec from the hub using its owner reference.
-			// Note: The index of 0 can be trusted only due to being in a testing environment.
-
-			// We need to retrieve the manifest by ordinal from the Work resource within the Hub.
-			// However, the until the AppliedWork controller is implemented / used, we will need to retrieve it using a method
-			// that can only be trusted within a controlled test environment.
-			// We should be getting the ordinal from the AppliedWork.Status.AppliedResources and match by GVK.
-			// Because the status of the AppliedWork resource is not yet updated by the controllers. We will get the manifest directly as we know the ordinal.
-			// Sleep needed to allow spoke work controller to provision the resource (ConfigMap).
-			time.Sleep(2 * time.Second)
-			createdWork, err = hubWorkClient.MulticlusterV1alpha1().Works(createdWork.Namespace).Get(context.Background(), createdWork.Name, metav1.GetOptions{})
-			gomega.Expect(err).ToNot(gomega.HaveOccurred())
-			manifestOrdinal := createdWork.Status.ManifestConditions[0].Identifier.Ordinal
-			resourceManifest := createdWork.Spec.Workload.Manifests[manifestOrdinal]
-
-			// Unmarshal the data into a struct, modify and then update it.
-			var cm v1.ConfigMap
-			err = json.Unmarshal(resourceManifest.Raw, &cm)
-			gomega.Expect(err).ToNot(gomega.HaveOccurred())
-
-			// Add random new key value pair into map.
-			randomNewKey := utilrand.String(5)
-			randomNewValue := utilrand.String(5)
-			cm.Data[randomNewKey] = randomNewValue
-
-			// Update the manifest value.
-			rawManifest, merr := json.Marshal(cm)
-			gomega.Expect(merr).ToNot(gomega.HaveOccurred())
-			manifest := workapi.Manifest{}
-			manifest.Raw = rawManifest
-			createdWork.Spec.Workload.Manifests[manifestOrdinal] = manifest
-
-			// Update the Work resource.
-			_, updateErr := hubWorkClient.MulticlusterV1alpha1().Works(createdWork.Namespace).Update(context.Background(), createdWork, metav1.UpdateOptions{})
-			gomega.Expect(updateErr).ToNot(gomega.HaveOccurred())
-
-			// Vet
-			gomega.Eventually(func() bool {
-				configMap, err := spokeKubeClient.CoreV1().ConfigMaps("default").Get(context.Background(), "test-configmap", metav1.GetOptions{})
-				gomega.Expect(err).ToNot(gomega.HaveOccurred())
-
-				return configMap.Data[randomNewKey] == randomNewValue
-			}, eventuallyTimeout, eventuallyInterval).Should(gomega.BeTrue())
-
-			// Reset
-			err = deleteWork(createdWork)
-			gomega.Expect(err).ToNot(gomega.HaveOccurred())
-		})
-	})
-})
-
-func createWork(manifestFiles []string) (*workapi.Work, error) {
-	workName := "work-" + utilrand.String(5)
-	workNamespace := "default"
-
+}
+func createWork(workName string, workNamespace string, manifestFiles []string) (*workapi.Work, error) {
 	work := &workapi.Work{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      workName,
@@ -257,25 +284,26 @@ func createWork(manifestFiles []string) (*workapi.Work, error) {
 	}
 
 	addManifestsToWorkSpec(manifestFiles, &work.Spec)
-	createdWork, err := hubWorkClient.MulticlusterV1alpha1().Works(work.Namespace).Create(context.Background(), work, metav1.CreateOptions{})
-	return createdWork, err
+	createdWork, createError = hubWorkClient.MulticlusterV1alpha1().Works(work.Namespace).Create(context.Background(), work, metav1.CreateOptions{})
+
+	return createdWork, createError
 }
-func deleteWork(work *workapi.Work) error {
-	err := hubWorkClient.MulticlusterV1alpha1().Works(work.Namespace).Delete(context.Background(), work.Name, metav1.DeleteOptions{})
-	return err
+func retrieveAppliedWork(resourceName string) (*workapi.AppliedWork, error) {
+	return spokeWorkClient.MulticlusterV1alpha1().AppliedWorks().Get(context.Background(), resourceName, metav1.GetOptions{})
 }
-
-func addManifestsToWorkSpec(manifestFileRelativePaths []string, workSpec *workapi.WorkSpec) {
-	for _, file := range manifestFileRelativePaths {
-		fileRaw, err := testManifestFiles.ReadFile(file)
-		gomega.Expect(err).ToNot(gomega.HaveOccurred())
-
-		obj, _, err := genericCodec.Decode(fileRaw, nil, nil)
-		gomega.Expect(err).ToNot(gomega.HaveOccurred())
-
-		workSpec.Workload.Manifests = append(
-			workSpec.Workload.Manifests, workapi.Manifest{
-				RawExtension: runtime.RawExtension{Object: obj},
-			})
+func retrieveWork(workNamespace string, workName string) (*workapi.Work, error) {
+	return hubWorkClient.MulticlusterV1alpha1().Works(workNamespace).Get(context.Background(), workName, metav1.GetOptions{})
+}
+func safeDeleteWork(work *workapi.Work) error {
+	// ToDo - Replace with proper Eventually.
+	time.Sleep(1 * time.Second)
+	_, getError = hubWorkClient.MulticlusterV1alpha1().Works(work.Namespace).Get(context.Background(), work.Name, metav1.GetOptions{})
+	if getError == nil {
+		deleteError = hubWorkClient.MulticlusterV1alpha1().Works(createdWork.Namespace).Delete(context.Background(), createdWork.Name, metav1.DeleteOptions{})
 	}
+
+	return getError
+}
+func updateWork(work *workapi.Work) (*workapi.Work, error) {
+	return hubWorkClient.MulticlusterV1alpha1().Works(work.Namespace).Update(context.Background(), work, metav1.UpdateOptions{})
 }
