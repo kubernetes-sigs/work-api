@@ -19,9 +19,11 @@ package controllers
 import (
 	"context"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -33,10 +35,18 @@ import (
 	"sigs.k8s.io/work-api/pkg/client/clientset/versioned"
 )
 
+const (
+	eventReasonAppliedWorkCreated = "AppliedWorkCreated"
+	eventReasonAppliedWorkDeleted = "AppliedWorkDeleted"
+	eventReasonFinalizerAdded     = "FinalizerAdded"
+	eventReasonFinalizerRemoved   = "FinalizerRemoved"
+)
+
 // FinalizeWorkReconciler reconciles a Work object for finalization
 type FinalizeWorkReconciler struct {
 	client      client.Client
 	spokeClient versioned.Interface
+	recorder    record.EventRecorder
 }
 
 // Reconcile implement the control loop logic for finalizing Work object.
@@ -90,7 +100,13 @@ func (r *FinalizeWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	r.recorder.Event(work, corev1.EventTypeNormal, eventReasonAppliedWorkCreated, "AppliedWork resource was created")
 	work.Finalizers = append(work.Finalizers, workFinalizer)
+
+	if err = r.client.Update(ctx, work, &client.UpdateOptions{}); err == nil {
+		r.recorder.Event(work, corev1.EventTypeNormal, eventReasonFinalizerAdded, "Work resource's finalizer added: "+workFinalizer)
+	}
+
 	return ctrl.Result{}, r.client.Update(ctx, work, &client.UpdateOptions{})
 }
 
@@ -104,9 +120,14 @@ func (r *FinalizeWorkReconciler) garbageCollectAppliedWork(ctx context.Context, 
 			klog.ErrorS(err, "failed to delete the applied Work", work.Name)
 			return ctrl.Result{}, err
 		}
+
+		r.recorder.Event(work, corev1.EventTypeNormal, eventReasonAppliedWorkDeleted, "AppliedWork was deleted")
 		klog.Infof("Removed the applied Work %s", work.Name)
+
 		controllerutil.RemoveFinalizer(work, workFinalizer)
+		r.recorder.Event(work, corev1.EventTypeNormal, eventReasonFinalizerRemoved, "Work resource's finalizer removed: "+workFinalizer)
 	}
+
 	return ctrl.Result{}, r.client.Update(ctx, work, &client.UpdateOptions{})
 }
 

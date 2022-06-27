@@ -94,9 +94,9 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 		return err
 	}
 
-	// TODO: Add event recorder
 	if err = (&FinalizeWorkReconciler{
 		client:      hubMgr.GetClient(),
+		recorder:    hubMgr.GetEventRecorderFor("WorkFinalizer_controller"),
 		spokeClient: spokeClientset,
 	}).SetupWithManager(hubMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkFinalize")
