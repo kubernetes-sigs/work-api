@@ -82,12 +82,12 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 		return err
 	}
 
-	// TODO: Add event recorder
 	if err = (&ApplyWorkReconciler{
 		client:             hubMgr.GetClient(),
 		spokeDynamicClient: spokeDynamicClient,
 		spokeClient:        spokeClient,
 		restMapper:         restMapper,
+		recorder:           hubMgr.GetEventRecorderFor("work_controller"),
 		concurrency:        maxWorkConcurrency,
 	}).SetupWithManager(hubMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Work")
