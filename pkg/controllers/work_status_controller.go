@@ -18,13 +18,14 @@ package controllers
 
 import (
 	"context"
-
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -36,13 +37,21 @@ import (
 	workapi "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
+const (
+	EventReasonResourceUnsuccessfullyGarbageCollected = "ResourceUnsuccessfullyGarbageCollected"
+	EventReasonResourceSuccessfullyGarbageCollected   = "ResourceSuccessfullyGarbageCollected"
+	EventReasonAppliedWorkUnsuccessfulUpdated         = "AppliedWorkUnsuccessfulUpdated"
+	EventReasonAppliedWorkSuccessfulUpdated           = "AppliedWorkSuccessfulUpdated"
+)
+
 // WorkStatusReconciler reconciles a Work object when its status changes
 type WorkStatusReconciler struct {
 	appliedResourceTracker
+	recorder    record.EventRecorder
 	concurrency int
 }
 
-func newWorkStatusReconciler(hubClient client.Client, spokeClient client.Client, spokeDynamicClient dynamic.Interface, restMapper meta.RESTMapper, concurrency int) *WorkStatusReconciler {
+func newWorkStatusReconciler(hubClient client.Client, spokeClient client.Client, spokeDynamicClient dynamic.Interface, restMapper meta.RESTMapper, recorder record.EventRecorder, concurrency int) *WorkStatusReconciler {
 	return &WorkStatusReconciler{
 		appliedResourceTracker: appliedResourceTracker{
 			hubClient:          hubClient,
@@ -50,6 +59,7 @@ func newWorkStatusReconciler(hubClient client.Client, spokeClient client.Client,
 			spokeDynamicClient: spokeDynamicClient,
 			restMapper:         restMapper,
 		},
+		recorder:    recorder,
 		concurrency: concurrency,
 	}
 }
@@ -70,17 +80,24 @@ func (r *WorkStatusReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	newRes, staleRes := r.calculateNewAppliedWork(work, appliedWork)
 	if err = r.deleteStaleWork(ctx, staleRes); err != nil {
 		klog.ErrorS(err, "failed to delete all the stale work", "work", req.NamespacedName)
+		r.recorder.Eventf(work, v1.EventTypeWarning, EventReasonResourceUnsuccessfullyGarbageCollected, "Resource unsuccessfully garbage collected for Work %s", work.GetName())
+
 		// we can't proceed to update the applied
 		return ctrl.Result{}, err
+	} else if len(staleRes) > 0 && err == nil {
+		// TODO: Specify which manifest was deleted.
+		r.recorder.Eventf(work, v1.EventTypeNormal, EventReasonResourceSuccessfullyGarbageCollected, "Resource(s) successfully garbage collected for Work %s", work.GetName())
 	}
 
 	// update the appliedWork with the new work
 	appliedWork.Status.AppliedResources = newRes
 	if err = r.spokeClient.Status().Update(ctx, appliedWork, &client.UpdateOptions{}); err != nil {
 		klog.ErrorS(err, "update appliedWork status failed", "appliedWork", appliedWork.GetName())
+		r.recorder.Eventf(work, v1.EventTypeWarning, EventReasonAppliedWorkUnsuccessfulUpdated, "Could not update AppliedWork %s", appliedWork.GetName())
 		return ctrl.Result{}, err
 	}
 
+	r.recorder.Eventf(work, v1.EventTypeNormal, EventReasonAppliedWorkSuccessfulUpdated, "Updated AppliedWork %s", appliedWork.GetName())
 	return ctrl.Result{}, nil
 }
 
@@ -151,7 +168,6 @@ func (r *WorkStatusReconciler) deleteStaleWork(ctx context.Context, staleWorks [
 			klog.ErrorS(err, "failed to delete a stale work", "work", staleWork)
 			errs = append(errs, err)
 		}
-
 	}
 	return utilerrors.NewAggregate(errs)
 }
