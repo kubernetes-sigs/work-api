@@ -114,27 +114,21 @@ var (
 		})
 
 		Describe("updated on the Hub", func() {
-			Context("with a new manifest", func() {
-				// Create then namespace for which the new manifest will be created within.
-				// Todo - utilize Work to ensure is applied.
-				namespace := &v1.Namespace{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "test-namespace",
-					},
-				}
-				manifests = append(manifests, "testmanifests/test-configmap2.yaml")
+			Context("with two new configmap & namespace manifests, where the configmap is dependent upon the namespace", func() {
+
+				// The order of these appended manifests is intentional. The test ensures that the configmap
+				// will eventually get created. The first attempt will fail as the namespace is created after.
+				manifests = append(manifests, "testmanifests/test-testns.configmap.yaml")
 				manifestMetaName = append(manifestMetaName, "test-configmap")
-				manifestMetaNamespaces = append(manifestMetaNamespaces, namespace.Name)
+				manifestMetaNamespaces = append(manifestMetaNamespaces, "test-namespace")
+
+				manifests = append(manifests, "testmanifests/test-namespace.yaml")
+				manifestMetaName = append(manifestMetaName, "test-namespace")
+				manifestMetaNamespaces = append(manifestMetaNamespaces, "")
 
 				BeforeEach(func() {
 					var work *workapi.Work
 					var err error
-
-					By("ensuring the namespace specified within the manifest already exists on the spoke")
-					Eventually(func() error {
-						_, err = spokeKubeClient.CoreV1().Namespaces().Create(context.Background(), namespace, metav1.CreateOptions{})
-						return err
-					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
 
 					By("getting the existing Work resource on the hub")
 					Eventually(func() error {
@@ -149,13 +143,15 @@ var (
 						return err
 					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
 				})
-				AfterEach(func() {
+
+				It("should have created the namespace", func() {
 					Eventually(func() error {
-						return spokeKubeClient.CoreV1().Namespaces().Delete(context.Background(), namespace.Name, metav1.DeleteOptions{})
+						_, err := spokeKubeClient.CoreV1().Namespaces().Get(context.Background(), manifestMetaName[4], metav1.GetOptions{})
+
+						return err
 					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
 				})
-
-				It("should have applied the added manifest", func() {
+				It("should have created the ConfigMap in the new namespace", func() {
 					Eventually(func() error {
 						_, err := spokeKubeClient.CoreV1().ConfigMaps(manifestMetaNamespaces[3]).Get(context.Background(), manifestMetaName[3], metav1.GetOptions{})
 
