@@ -199,6 +199,81 @@ var (
 					}, eventuallyTimeout, eventuallyInterval).Should(BeTrue())
 				})
 			})
+			Context("with a added, modified, and removed manifest", func() {
+				// Todo, refactor this context to not use "over complicated structure".
+				var cm v1.ConfigMap
+				var err error
+				var newDataKey string
+				var newDataValue string
+				var configMapName string
+				var configMapNamespace string
+				var namespaceToDelete string
+
+				It("should create a secret, modify the existing configmap, and remove the second configmap, from within the spoke", func() {
+					By("getting the existing Work resource on the hub")
+					Eventually(func() error {
+						createdWork, err = retrieveWork(createdWork.Namespace, createdWork.Name)
+						return err
+					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+
+					By("removing the test-namespace manifest")
+					namespaceToDelete = manifestMetaName[4]
+					manifests = manifests[:4]
+					manifestMetaName = manifestMetaName[:4]
+					manifestMetaNamespaces = manifestMetaNamespaces[:4]
+					createdWork.Spec.Workload.Manifests = createdWork.Spec.Workload.Manifests[:4]
+
+					By("modifying the existing configmap's manifest values")
+					configManifest := createdWork.Spec.Workload.Manifests[2]
+					// Unmarshal the data into a struct, modify and then update it.
+					err := json.Unmarshal(configManifest.Raw, &cm)
+					Expect(err).ToNot(HaveOccurred())
+					configMapName = cm.Name
+					configMapNamespace = cm.Namespace
+
+					// Add random new key value pair into map.
+					newDataKey = utilrand.String(5)
+					newDataValue = utilrand.String(5)
+					cm.Data[newDataKey] = newDataValue
+					rawManifest, err := json.Marshal(cm)
+					Expect(err).ToNot(HaveOccurred())
+					updatedManifest := workapi.Manifest{}
+					updatedManifest.Raw = rawManifest
+					createdWork.Spec.Workload.Manifests[2] = updatedManifest
+
+					By("adding a secret manifest")
+					manifests = append(manifests, "testmanifests/test-secret.yaml")
+					manifestMetaName = append(manifestMetaName, "test-secret")
+					manifestMetaNamespaces = append(manifestMetaNamespaces, "default")
+					addManifestsToWorkSpec([]string{manifests[4]}, &createdWork.Spec)
+
+					By("updating all manifest changes to the Work resource in the hub")
+					createdWork, updateError = updateWork(createdWork)
+					Expect(updateError).ToNot(HaveOccurred())
+
+					By("verifying that modified configmap was updated in the spoke")
+					Eventually(func() bool {
+						configMap, err := spokeKubeClient.CoreV1().ConfigMaps(configMapNamespace).Get(context.Background(), configMapName, metav1.GetOptions{})
+						Expect(err).ToNot(HaveOccurred())
+
+						return configMap.Data[newDataKey] == newDataValue
+					}, eventuallyTimeout, eventuallyInterval).Should(BeTrue())
+
+					By("verifying that the test-namespace was deleted")
+					Eventually(func() error {
+						_, err := spokeKubeClient.CoreV1().Namespaces().Get(context.Background(), namespaceToDelete, metav1.GetOptions{})
+
+						return err
+					}, eventuallyTimeout, eventuallyInterval).Should(HaveOccurred())
+
+					By("verifying that new secret was created in the spoke")
+					Eventually(func() error {
+						_, err := spokeKubeClient.CoreV1().Secrets(manifestMetaNamespaces[4]).Get(context.Background(), manifestMetaName[4], metav1.GetOptions{})
+
+						return err
+					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+				})
+			})
 		})
 
 		Describe("deleted from the Hub", func() {
