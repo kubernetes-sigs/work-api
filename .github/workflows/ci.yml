@@ -75,14 +75,13 @@ jobs:
           GOPATH: ${{ env.GO_PATH }}
 
       - name: Upload report
-        uses: codecov/codecov-action@v2.1.0
+        uses: codecov/codecov-action@v3
         with:
-          ## Repository upload token - get it from codecov.io. Required only for private repositories
-          token: ${{ secrets.CODECOV_TOKEN }}
           ## Comma-separated list of files to upload
-          files: ./cover.out
+          files: go/src/sigs.k8s.io/work-api/cover.out
           flags: ci-tests
           name: codecov-umbrella
+          fail_ci_if_error: true
 
   e2e:
     name: e2e
