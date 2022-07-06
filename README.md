@@ -2,6 +2,11 @@
 
 This repo will hold design documents and implementation of the [Work API](https://docs.google.com/document/d/1cWcdB40pGg3KS1eSyb9Q6SIRvWVI8dEjFp9RI0Gk0vg/edit#).
 
+![GitHub go.mod Go version][1] ![Build Status][2] [![codecov][3]][4]
+![issues][5] ![Activity][6]
+
+![GitHub release (latest by date)][7]
+
 ## Community, discussion, contribution, and support
 
 Learn how to engage with the Kubernetes community on the [community page](http://kubernetes.io/community/).
@@ -18,12 +23,13 @@ This guide will cover:
 - Create a `kind` cluster that acts as the `hub` work delivery control plane.
 - Create a `kind` cluster that acts as the `spoke` cluster for the work to be delivery to.
 - Install the `work` CRD to the `hub` cluster.
+- Install the `appliedwork` CRD to the `spoke` cluster.
 - Install the `work` agent components to the `spoke` cluster.
 - Deploy a `work` example on the `hub` cluster.
 - Verify all the contents inside the `work` has been delivered in the `spoke` cluster.
 
 ### Prerequisites
-- [Go](https://golang.org) version v1.16+
+- [Go](https://golang.org) version v1.17+
 - [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl) version v1.19+
 - [kind](https://kind.sigs.k8s.io) version v0.9.0+
 
@@ -94,3 +100,11 @@ kubectl apply -f examples/example-work-modify.yaml
 ### Code of conduct
 
 Participation in the Kubernetes community is governed by the [Kubernetes Code of Conduct](code-of-conduct.md).
+
+[1]:  https://img.shields.io/github/go-mod/go-version/Azure/k8s-work-api
+[2]:  https://github.com//Azure/k8s-work-api/actions/workflows/ci.yml/badge.svg
+[3]:  https://codecov.io/gh/Azure/k8s-work-api/branch/master/graph/badge.svg?token=POCZ4NVDJF
+[4]:  https://codecov.io/gh/Azure/k8s-work-api
+[5]:  https://img.shields.io/github/issues/azure/k8s-work-api
+[6]:  https://img.shields.io/github/commit-activity/m/azure/k8s-work-api
+[7]:  https://img.shields.io/github/v/release/Azure/k8s-work-api
