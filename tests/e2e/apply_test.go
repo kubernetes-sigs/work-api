@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/json"
 	utilrand "k8s.io/apimachinery/pkg/util/rand"
+
 	workapi "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
@@ -115,7 +116,6 @@ var (
 
 		Describe("updated on the Hub", func() {
 			Context("with two new configmap & namespace manifests, where the configmap is dependent upon the namespace", func() {
-
 				// The order of these appended manifests is intentional. The test ensures that the configmap
 				// will eventually get created. The first attempt will fail as the namespace is created after.
 				manifests = append(manifests, "testmanifests/test-testns.configmap.yaml")
@@ -192,8 +192,7 @@ var (
 
 				It("should reapply the manifest.", func() {
 					Eventually(func() bool {
-						configMap, err := spokeKubeClient.CoreV1().ConfigMaps(configMapNamespace).Get(context.Background(), configMapName, metav1.GetOptions{})
-						Expect(err).ToNot(HaveOccurred())
+						configMap, _ := spokeKubeClient.CoreV1().ConfigMaps(configMapNamespace).Get(context.Background(), configMapName, metav1.GetOptions{})
 
 						return configMap.Data[newDataKey] == newDataValue
 					}, eventuallyTimeout, eventuallyInterval).Should(BeTrue())
@@ -253,8 +252,7 @@ var (
 
 					By("verifying that modified configmap was updated in the spoke")
 					Eventually(func() bool {
-						configMap, err := spokeKubeClient.CoreV1().ConfigMaps(configMapNamespace).Get(context.Background(), configMapName, metav1.GetOptions{})
-						Expect(err).ToNot(HaveOccurred())
+						configMap, _ := spokeKubeClient.CoreV1().ConfigMaps(configMapNamespace).Get(context.Background(), configMapName, metav1.GetOptions{})
 
 						return configMap.Data[newDataKey] == newDataValue
 					}, eventuallyTimeout, eventuallyInterval).Should(BeTrue())
@@ -271,6 +269,34 @@ var (
 						_, err := spokeKubeClient.CoreV1().Secrets(manifestMetaNamespaces[4]).Get(context.Background(), manifestMetaName[4], metav1.GetOptions{})
 
 						return err
+					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+				})
+			})
+			Context("with a CRD manifest", func() {
+				It("should create the CRD on the spoke", func() {
+					manifests = append(manifests, "testmanifests/test-crd.yaml")
+					manifestMetaName = append(manifestMetaName, "testcrds.multicluster.x-k8s.io")
+					manifestMetaNamespaces = append(manifestMetaNamespaces, "default")
+
+					By("getting the existing Work resource on the hub")
+					Eventually(func() error {
+						createdWork, getError = retrieveWork(createdWork.Namespace, createdWork.Name)
+
+						return getError
+					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+
+					By("adding the new manifest to the Work resource and updating it on the hub")
+					Eventually(func() error {
+						addManifestsToWorkSpec([]string{manifests[5]}, &createdWork.Spec)
+						_, updateError = updateWork(createdWork)
+
+						return updateError
+					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+
+					Eventually(func() error {
+						_, getError = spokeApiExtensionClient.ApiextensionsV1().CustomResourceDefinitions().Get(context.Background(), manifestMetaName[5], metav1.GetOptions{})
+
+						return getError
 					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
 				})
 			})
@@ -323,7 +349,6 @@ var (
 				}, eventuallyTimeout, eventuallyInterval).Should(HaveOccurred())
 			})
 		})
-
 	})
 )
 

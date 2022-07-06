@@ -23,7 +23,8 @@ import (
 
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/gomega"
-
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiextension "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -34,15 +35,19 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
 	workclientset "sigs.k8s.io/work-api/pkg/client/clientset/versioned"
 )
 
 var (
-	restConfig         *rest.Config
-	hubWorkClient      workclientset.Interface
-	spokeKubeClient    kubernetes.Interface
-	spokeDynamicClient dynamic.Interface
-	spokeWorkClient    workclientset.Interface
+	restConfig *rest.Config
+
+	hubWorkClient workclientset.Interface
+
+	spokeApiExtensionClient *apiextension.Clientset
+	spokeDynamicClient      dynamic.Interface
+	spokeKubeClient         kubernetes.Interface
+	spokeWorkClient         workclientset.Interface
 
 	//go:embed testmanifests
 	testManifestFiles embed.FS
@@ -54,6 +59,7 @@ var (
 
 func init() {
 	utilruntime.Must(scheme.AddToScheme(genericScheme))
+	utilruntime.Must(apiextensionsv1.AddToScheme(genericScheme))
 }
 
 func TestE2e(t *testing.T) {
@@ -76,6 +82,9 @@ var _ = ginkgo.BeforeSuite(func() {
 	gomega.Expect(err).ToNot(gomega.HaveOccurred())
 
 	hubWorkClient, err = workclientset.NewForConfig(restConfig)
+	gomega.Expect(err).ToNot(gomega.HaveOccurred())
+
+	spokeApiExtensionClient, err = apiextension.NewForConfig(restConfig)
 	gomega.Expect(err).ToNot(gomega.HaveOccurred())
 
 	spokeDynamicClient, err = dynamic.NewForConfig(restConfig)
