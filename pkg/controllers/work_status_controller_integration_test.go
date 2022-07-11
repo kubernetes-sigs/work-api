@@ -136,11 +136,14 @@ var _ = Describe("Work Status Reconciler", func() {
 	Context("Receives a request where a Work's manifest condition exists, but there"+
 		" isn't a respective AppliedResourceMeta.", func() {
 		It("Resource is deleted from the AppliedResources of the AppliedWork", func() {
-			currentAppliedWork, err := workClient.MulticlusterV1alpha1().AppliedWorks().Get(context.Background(), workName, metav1.GetOptions{})
-			Expect(err).ToNot(HaveOccurred())
-			currentAppliedWork.Status.AppliedResources = []workv1alpha1.AppliedResourceMeta{}
-			_, err = workClient.MulticlusterV1alpha1().AppliedWorks().Update(context.Background(), currentAppliedWork, metav1.UpdateOptions{})
-			Expect(err).ToNot(HaveOccurred())
+			Eventually(func() error {
+				currentAppliedWork, err := workClient.MulticlusterV1alpha1().AppliedWorks().Get(context.Background(), workName, metav1.GetOptions{})
+				Expect(err).ToNot(HaveOccurred())
+
+				currentAppliedWork.Status.AppliedResources = []workv1alpha1.AppliedResourceMeta{}
+				_, err = workClient.MulticlusterV1alpha1().AppliedWorks().Update(context.Background(), currentAppliedWork, metav1.UpdateOptions{})
+				return err
+			}, timeout, interval).ShouldNot(HaveOccurred())
 
 			Eventually(func() bool {
 				currentAppliedWork, err := workClient.MulticlusterV1alpha1().AppliedWorks().Get(context.Background(), workName, metav1.GetOptions{})
