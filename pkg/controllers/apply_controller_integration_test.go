@@ -177,17 +177,19 @@ var _ = Describe("work reconciler", func() {
 
 			var originalWork *workv1alpha1.Work
 			var err error
-			originalWork, err = workClient.MulticlusterV1alpha1().Works(workNamespace).Get(context.Background(), workName, metav1.GetOptions{})
-			Expect(err).ToNot(HaveOccurred())
+			Eventually(func() error {
+				originalWork, err = workClient.MulticlusterV1alpha1().Works(workNamespace).Get(context.Background(), workName, metav1.GetOptions{})
+				Expect(err).ToNot(HaveOccurred())
 
-			newWork := originalWork.DeepCopy()
-			newWork.Spec.Workload.Manifests = []workv1alpha1.Manifest{
-				{
-					RawExtension: runtime.RawExtension{Object: &cm},
-				},
-			}
-			_, err = workClient.MulticlusterV1alpha1().Works(workNamespace).Update(context.Background(), newWork, metav1.UpdateOptions{})
-			Expect(err).ToNot(HaveOccurred())
+				newWork := originalWork.DeepCopy()
+				newWork.Spec.Workload.Manifests = []workv1alpha1.Manifest{
+					{
+						RawExtension: runtime.RawExtension{Object: &cm},
+					},
+				}
+				_, err = workClient.MulticlusterV1alpha1().Works(workNamespace).Update(context.Background(), newWork, metav1.UpdateOptions{})
+				return err
+			}, timeout, interval).ShouldNot(HaveOccurred())
 
 			By("Work status", func() {
 				Eventually(func() bool {
