@@ -138,7 +138,7 @@ var (
 
 					By("adding the new manifest to the Work resource and updating it on the hub")
 					Eventually(func() error {
-						addManifestsToWorkSpec([]string{manifests[2]}, &work.Spec)
+						addManifestsToWorkSpec([]string{manifests[3], manifests[4]}, &work.Spec)
 						_, err = updateWork(work)
 						return err
 					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
@@ -298,6 +298,57 @@ var (
 
 						return getError
 					}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+				})
+			})
+			Context("with all new manifests", func() {
+				It("should delete all previously applied resources", func() {
+					manifests = []string{"testmanifests/test-serviceaccount.yaml"}
+					manifestMetaName = []string{"test-serviceaccount"}
+					manifestMetaNamespaces = []string{"default"}
+					aResourceStillExists := true
+
+					// Get the current AppliedWork, so we can verify the previously applied resources have been deleted.
+					time.Sleep(3 * time.Second) // Time for the AppliedWork to be updated by the reconciler.
+					appliedWork, getError = spokeWorkClient.MulticlusterV1alpha1().AppliedWorks().Get(context.Background(), createdWork.Name, metav1.GetOptions{})
+
+					// Get the Work resource and update replace its manifests.
+					createdWork, getError = hubWorkClient.MulticlusterV1alpha1().Works(createdWork.Namespace).Get(context.Background(), createdWork.Name, metav1.GetOptions{})
+					Expect(getError).ShouldNot(HaveOccurred())
+
+					createdWork.Spec.Workload.Manifests = nil
+					addManifestsToWorkSpec([]string{manifests[0]}, &createdWork.Spec)
+					createdWork, updateError = hubWorkClient.MulticlusterV1alpha1().Works(createdWork.Namespace).Update(context.Background(), createdWork, metav1.UpdateOptions{})
+					Expect(updateError).ShouldNot(HaveOccurred())
+
+					By("checking to see if all previously applied works have been deleted", func() {
+						Eventually(func() bool {
+							for aResourceStillExists == true {
+								for _, ar := range appliedWork.Status.AppliedResources {
+									gvr := schema.GroupVersionResource{
+										Group:    ar.Group,
+										Version:  ar.Version,
+										Resource: ar.Resource,
+									}
+
+									_, getError = spokeDynamicClient.Resource(gvr).Namespace(ar.Namespace).Get(context.Background(), ar.Name, metav1.GetOptions{})
+									if getError != nil {
+										aResourceStillExists = false
+									} else {
+										aResourceStillExists = true
+									}
+								}
+							}
+							return aResourceStillExists
+						}, eventuallyTimeout, eventuallyInterval).ShouldNot(BeTrue())
+					})
+
+					By("verifying the new manifest was applied", func() {
+						Eventually(func() error {
+							_, getError = spokeKubeClient.CoreV1().ServiceAccounts(manifestMetaNamespaces[0]).Get(context.Background(), manifestMetaName[0], metav1.GetOptions{})
+
+							return getError
+						}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+					})
 				})
 			})
 		})
