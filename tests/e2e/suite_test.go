@@ -18,7 +18,9 @@ package e2e
 
 import (
 	"embed"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"os"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"testing"
 
 	"github.com/onsi/ginkgo"
@@ -41,6 +43,7 @@ import (
 
 var (
 	restConfig *rest.Config
+	restMapper meta.RESTMapper
 
 	hubWorkClient workclientset.Interface
 
@@ -49,7 +52,7 @@ var (
 	spokeKubeClient         kubernetes.Interface
 	spokeWorkClient         workclientset.Interface
 
-	//go:embed testmanifests
+	//go:embed manifests
 	testManifestFiles embed.FS
 
 	genericScheme = runtime.NewScheme()
@@ -94,5 +97,8 @@ var _ = ginkgo.BeforeSuite(func() {
 	gomega.Expect(err).ToNot(gomega.HaveOccurred())
 
 	spokeWorkClient, err = workclientset.NewForConfig(restConfig)
+	gomega.Expect(err).ToNot(gomega.HaveOccurred())
+
+	restMapper, err = apiutil.NewDynamicRESTMapper(restConfig, apiutil.WithLazyDiscovery)
 	gomega.Expect(err).ToNot(gomega.HaveOccurred())
 })
