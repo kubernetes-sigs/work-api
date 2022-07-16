@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"time"
 
 	. "github.com/onsi/ginkgo"
@@ -93,13 +94,18 @@ var _ = Describe("Work Status Reconciler", func() {
 			},
 		}
 
-		_, createWorkErr := workClient.MulticlusterV1alpha1().Works(workNamespace).Create(context.Background(), work, metav1.CreateOptions{})
+		createWorkErr := workClient.Create(context.Background(), work)
 		Expect(createWorkErr).ToNot(HaveOccurred())
 
 		Eventually(func() bool {
-			appliedWorkObject, _ := workClient.MulticlusterV1alpha1().AppliedWorks().Get(context.Background(), workName, metav1.GetOptions{})
+			namespacedName := types.NamespacedName{Name: workName, Namespace: workNamespace}
 
-			return appliedWorkObject.Spec.WorkName == workName
+			getAppliedWork := workv1alpha1.AppliedWork{}
+			err := workClient.Get(context.Background(), namespacedName, &getAppliedWork)
+			if err == nil {
+				return getAppliedWork.Spec.WorkName == workName
+			}
+			return false
 		}, timeout, interval).Should(BeTrue())
 	})
 
@@ -111,15 +117,14 @@ var _ = Describe("Work Status Reconciler", func() {
 
 	Context("Receives a request where a Work's manifest condition does not contain the metadata of an existing AppliedResourceMeta", func() {
 		It("Should delete the resource from the spoke cluster", func() {
-			Eventually(func() error {
-				currentWork, err := workClient.MulticlusterV1alpha1().Works(workNamespace).Get(context.Background(), workName, metav1.GetOptions{})
-				Expect(err).ToNot(HaveOccurred())
+			currentWork := workv1alpha1.Work{}
+			err := workClient.Get(context.Background(), types.NamespacedName{Name: workName, Namespace: workNamespace}, &currentWork)
+			Expect(err).ToNot(HaveOccurred())
 
-				currentWork.Status.ManifestConditions = []workv1alpha1.ManifestCondition{}
+			currentWork.Status.ManifestConditions = []workv1alpha1.ManifestCondition{}
 
-				_, err = workClient.MulticlusterV1alpha1().Works(workNamespace).Update(context.Background(), currentWork, metav1.UpdateOptions{})
-				return err
-			}, timeout, interval).ShouldNot(HaveOccurred())
+			err = workClient.Update(context.Background(), &currentWork)
+			Expect(err).ToNot(HaveOccurred())
 
 			Eventually(func() bool {
 				gvr := schema.GroupVersionResource{
@@ -136,20 +141,20 @@ var _ = Describe("Work Status Reconciler", func() {
 	Context("Receives a request where a Work's manifest condition exists, but there"+
 		" isn't a respective AppliedResourceMeta.", func() {
 		It("Resource is deleted from the AppliedResources of the AppliedWork", func() {
-			Eventually(func() error {
-				currentAppliedWork, err := workClient.MulticlusterV1alpha1().AppliedWorks().Get(context.Background(), workName, metav1.GetOptions{})
-				Expect(err).ToNot(HaveOccurred())
-
-				currentAppliedWork.Status.AppliedResources = []workv1alpha1.AppliedResourceMeta{}
-				_, err = workClient.MulticlusterV1alpha1().AppliedWorks().Update(context.Background(), currentAppliedWork, metav1.UpdateOptions{})
-				return err
-			}, timeout, interval).ShouldNot(HaveOccurred())
+			appliedWork := workv1alpha1.AppliedWork{}
+			err := workClient.Get(context.Background(), types.NamespacedName{Name: workName, Namespace: workNamespace}, &appliedWork)
+			Expect(err).ToNot(HaveOccurred())
+			appliedWork.Status.AppliedResources = []workv1alpha1.AppliedResourceMeta{}
+			err = workClient.Update(context.Background(), &appliedWork)
+			Expect(err).ToNot(HaveOccurred())
 
 			Eventually(func() bool {
-				currentAppliedWork, err := workClient.MulticlusterV1alpha1().AppliedWorks().Get(context.Background(), workName, metav1.GetOptions{})
-				Expect(err).ToNot(HaveOccurred())
+				err := workClient.Update(context.Background(), &appliedWork)
+				if err != nil {
+					return false
+				}
 
-				return len(currentAppliedWork.Status.AppliedResources) > 0
+				return len(appliedWork.Status.AppliedResources) > 0
 			}, timeout, interval).Should(BeTrue())
 		})
 	})

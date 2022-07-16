@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"testing"
 
 	. "github.com/onsi/ginkgo"
@@ -34,7 +35,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
-	workclient "sigs.k8s.io/work-api/pkg/client/clientset/versioned"
 )
 
 // These tests use Ginkgo (BDD-style Go testing framework). Refer to
@@ -43,7 +43,7 @@ var (
 	cfg *rest.Config
 	// TODO: Seperate k8sClient into hub and spoke
 	k8sClient     kubernetes.Interface
-	workClient    workclient.Interface
+	workClient    client.Client
 	dynamicClient dynamic.Interface
 	testEnv       *envtest.Environment
 	setupLog      = ctrl.Log.WithName("test")
@@ -79,7 +79,9 @@ var _ = BeforeSuite(func(done Done) {
 
 	k8sClient, err = kubernetes.NewForConfig(cfg)
 	Expect(err).NotTo(HaveOccurred())
-	workClient, err = workclient.NewForConfig(cfg)
+	workClient, err = client.New(cfg, client.Options{
+		Scheme: scheme.Scheme,
+	})
 	Expect(err).NotTo(HaveOccurred())
 	dynamicClient, err = dynamic.NewForConfig(cfg)
 	Expect(err).NotTo(HaveOccurred())

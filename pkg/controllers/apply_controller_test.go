@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"k8s.io/apimachinery/pkg/types"
 	"time"
 
 	. "github.com/onsi/ginkgo"
@@ -74,7 +75,7 @@ var _ = Describe("Work Controller", func() {
 
 			work := &workv1alpha1.Work{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "comfigmap-work",
+					Name:      "test-work",
 					Namespace: workNamespace,
 				},
 				Spec: workv1alpha1.WorkSpec{
@@ -88,7 +89,7 @@ var _ = Describe("Work Controller", func() {
 				},
 			}
 
-			_, err := workClient.MulticlusterV1alpha1().Works(workNamespace).Create(context.Background(), work, metav1.CreateOptions{})
+			err := workClient.Create(context.Background(), work)
 			Expect(err).ToNot(HaveOccurred())
 
 			Eventually(func() error {
@@ -97,7 +98,8 @@ var _ = Describe("Work Controller", func() {
 			}, timeout, interval).Should(Succeed())
 
 			Eventually(func() error {
-				resultWork, err := workClient.MulticlusterV1alpha1().Works(workNamespace).Get(context.Background(), work.Name, metav1.GetOptions{})
+				resultWork := workv1alpha1.Work{}
+				err := workClient.Get(context.Background(), types.NamespacedName{Name: work.GetName(), Namespace: workNamespace}, &resultWork)
 				if err != nil {
 					return err
 				}

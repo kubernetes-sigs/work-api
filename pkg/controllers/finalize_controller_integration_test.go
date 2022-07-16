@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 	"time"
 
@@ -96,7 +97,7 @@ var _ = Describe("Garbage Collected", func() {
 			},
 		}
 
-		_, createWorkErr := workClient.MulticlusterV1alpha1().Works(workNamespace).Create(context.Background(), work, metav1.CreateOptions{})
+		createWorkErr := workClient.Create(context.Background(), work)
 		Expect(createWorkErr).ToNot(HaveOccurred())
 	})
 
@@ -110,8 +111,12 @@ var _ = Describe("Garbage Collected", func() {
 	Context("A Work object with manifests has been created.", func() {
 		It("Should have created an AppliedWork object", func() {
 			Eventually(func() bool {
-				appliedWorkObject, err2 := workClient.MulticlusterV1alpha1().AppliedWorks().Get(context.Background(), workName, metav1.GetOptions{})
-				if err2 == nil {
+				appliedWorkObject := workv1alpha1.AppliedWork{}
+				err := workClient.Get(context.Background(), types.NamespacedName{
+					Namespace: workNamespace,
+					Name:      workName,
+				}, &appliedWorkObject)
+				if err == nil {
 					return appliedWorkObject.Spec.WorkName == workName
 				}
 				return false

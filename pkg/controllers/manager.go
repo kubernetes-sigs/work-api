@@ -27,8 +27,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
-
-	clientset "sigs.k8s.io/work-api/pkg/client/clientset/versioned"
 )
 
 const (
@@ -70,11 +68,6 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 		os.Exit(1)
 	}
 
-	spokeClientset, err := clientset.NewForConfig(spokeCfg)
-	if err != nil {
-		klog.Fatalf("Error building example clientset: %s", err.Error())
-	}
-
 	if err = newWorkStatusReconciler(
 		hubMgr.GetClient(),
 		spokeClient,
@@ -102,7 +95,7 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 	if err = (&FinalizeWorkReconciler{
 		client:      hubMgr.GetClient(),
 		recorder:    hubMgr.GetEventRecorderFor("WorkFinalizer_controller"),
-		spokeClient: spokeClientset,
+		spokeClient: spokeClient,
 	}).SetupWithManager(hubMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkFinalize")
 		return err

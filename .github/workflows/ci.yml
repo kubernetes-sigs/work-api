@@ -8,6 +8,7 @@ on:
     branches:
       - master
       - release-*
+      - Feature/*
   workflow_dispatch: {}
 
 defaults:
@@ -78,14 +79,14 @@ jobs:
         env:
           GOPATH: ${{ env.GO_PATH }}
 
-      - name: Upload report
-        uses: codecov/codecov-action@v3
-        with:
-          ## Comma-separated list of files to upload
-          files: go/src/sigs.k8s.io/work-api/cover.out
-          flags: ci-tests
-          name: codecov-umbrella
-          fail_ci_if_error: true
+#      - name: Upload report
+#        uses: codecov/codecov-action@v3
+#        with:
+#          ## Comma-separated list of files to upload
+#          files: go/src/sigs.k8s.io/work-api/cover.out
+#          flags: ci-tests
+#          name: codecov-umbrella
+#          fail_ci_if_error: true
 
   e2e:
     name: e2e

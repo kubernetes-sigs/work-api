@@ -13,7 +13,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
-	"sigs.k8s.io/work-api/pkg/client/clientset/versioned/fake"
 )
 
 // TestWrapper is a struct used to encapsulate the mocked dependencies needed to simulate a specific flow in logic.
@@ -84,12 +83,9 @@ func generateTestWrapper() *TestWrapper {
 
 	return &TestWrapper{
 		mockReconciler: &FinalizeWorkReconciler{
-			client:   test.NewMockClient(),
-			recorder: utils.NewFakeRecorder(2),
-			spokeClient: fake.NewSimpleClientset(
-				mockWork,
-				mockAppliedWork,
-			)},
+			client:      test.NewMockClient(),
+			recorder:    utils.NewFakeRecorder(2),
+			spokeClient: test.NewMockClient()},
 		mockAppliedWork: mockAppliedWork,
 		mockWork:        mockWork,
 	}
