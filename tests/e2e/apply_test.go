@@ -6,6 +6,7 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -42,6 +43,12 @@ var _ = Describe("Work creation", func() {
 		"with a CRD manifest",
 		[]string{
 			"manifests/test-crd.yaml",
+		})
+
+	MultipleWorkWithSameManifestContext(
+		"with two resource for the same resource: Deployment",
+		[]string{
+			"manifests/test-deployment.yaml",
 		})
 })
 
@@ -196,6 +203,9 @@ var WorkUpdateWithDependencyContext = func(description string, initialManifestFi
 
 		AfterEach(func() {
 			err = deleteWorkResource(createdWork)
+			Expect(err).ToNot(HaveOccurred())
+
+			err = spokeKubeClient.CoreV1().ConfigMaps(addedManifestDetails[0].ObjMeta.Namespace).Delete(context.Background(), addedManifestDetails[0].ObjMeta.Name, metav1.DeleteOptions{})
 			Expect(err).ToNot(HaveOccurred())
 		})
 
@@ -411,6 +421,91 @@ var WorkDeletedContext = func(description string, manifestFiles []string) bool {
 			}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
 		})
 
+	})
+}
+
+var MultipleWorkWithSameManifestContext = func(description string, manifestFiles []string) bool {
+	return Context(description, func() {
+		var workOne *workapi.Work
+		var workTwo *workapi.Work
+		var err error
+		var manifestDetailsOne []manifestDetails
+		var manifestDetailsTwo []manifestDetails
+
+		BeforeEach(func() {
+			manifestDetailsOne = generateManifestDetails(manifestFiles)
+			manifestDetailsTwo = generateManifestDetails(manifestFiles)
+
+			workOne = createWorkObj(
+				utilrand.String(5),
+				"default",
+				manifestDetailsOne,
+			)
+
+			workTwo = createWorkObj(
+				utilrand.String(5),
+				"default",
+				manifestDetailsTwo)
+
+		})
+
+		AfterEach(func() {
+			err = deleteWorkResource(workOne)
+			Expect(err).ToNot(HaveOccurred())
+
+			err = deleteWorkResource(workTwo)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("should ignore the duplicate manifest", func() {
+
+			By("creating the work resources")
+			err = createWork(workOne)
+			Expect(err).ToNot(HaveOccurred())
+
+			err = createWork(workTwo)
+			Expect(err).ToNot(HaveOccurred())
+
+			By("Checking the Applied Work status of each to see if one of the manifest is abandoned.")
+			Eventually(func() bool {
+				appliedWorkOne, err := retrieveAppliedWork(workOne.Name)
+				if err != nil {
+					return false
+				}
+
+				appliedWorkTwo, err := retrieveAppliedWork(workTwo.Name)
+				if err != nil {
+					return false
+				}
+
+				return len(appliedWorkOne.Status.AppliedResources)+len(appliedWorkTwo.Status.AppliedResources) == 1
+			}, eventuallyTimeout, eventuallyInterval).Should(BeTrue())
+
+			By("Checking the work status of each works for verification")
+			Eventually(func() bool {
+				workOne, err := retrieveWork(workOne.Namespace, workOne.Name)
+				if err != nil {
+					return false
+				}
+				workTwo, err := retrieveWork(workTwo.Namespace, workTwo.Name)
+				if err != nil {
+					return false
+				}
+				workOneCondition := meta.IsStatusConditionTrue(workOne.Status.ManifestConditions[0].Conditions, "Applied")
+				workTwoCondition := meta.IsStatusConditionTrue(workTwo.Status.ManifestConditions[0].Conditions, "Applied")
+				return (workOneCondition || workTwoCondition) && !(workOneCondition && workTwoCondition)
+			}, eventuallyTimeout, eventuallyInterval).Should(BeTrue())
+
+			By("verifying the resource was garbage collected")
+			Eventually(func() error {
+
+				return spokeKubeClient.AppsV1().Deployments(manifestDetailsOne[0].ObjMeta.Namespace).Delete(context.Background(), manifestDetailsOne[0].ObjMeta.Name, metav1.DeleteOptions{})
+			}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+			Eventually(func() error {
+
+				return spokeKubeClient.AppsV1().Deployments(manifestDetailsTwo[0].ObjMeta.Namespace).Delete(context.Background(), manifestDetailsTwo[0].ObjMeta.Name, metav1.DeleteOptions{})
+			}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+		})
 	})
 }
 
