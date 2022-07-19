@@ -60,7 +60,6 @@ jobs:
     runs-on: ubuntu-20.04
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true'
-    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -83,3 +82,4 @@ jobs:
         uses: golangci/golangci-lint-action@v2
         with:
           version: ${{ env.GOLANGCI_VERSION }}
+          timeout: 5
