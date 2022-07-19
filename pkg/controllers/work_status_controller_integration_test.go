@@ -156,7 +156,8 @@ var _ = Describe("Work Status Reconciler", func() {
 			}, timeout, interval).ShouldNot(HaveOccurred())
 
 			Eventually(func() bool {
-				err := workClient.Update(context.Background(), &appliedWork)
+				namespacedName := types.NamespacedName{Name: workName, Namespace: workNamespace}
+				err := workClient.Get(context.Background(), namespacedName, &appliedWork)
 				if err != nil {
 					return false
 				}
