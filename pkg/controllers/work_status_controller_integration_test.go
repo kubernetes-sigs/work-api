@@ -18,9 +18,10 @@ package controllers
 
 import (
 	"context"
+	"time"
+
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -29,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilrand "k8s.io/apimachinery/pkg/util/rand"
+
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
@@ -140,13 +142,18 @@ var _ = Describe("Work Status Reconciler", func() {
 	})
 	Context("Receives a request where a Work's manifest condition exists, but there"+
 		" isn't a respective AppliedResourceMeta.", func() {
-		It("Resource is deleted from the AppliedResources of the AppliedWork", func() {
+		It("should delete the AppliedResourceMeta from the respective AppliedWork status", func() {
+
 			appliedWork := workv1alpha1.AppliedWork{}
-			err := workClient.Get(context.Background(), types.NamespacedName{Name: workName, Namespace: workNamespace}, &appliedWork)
-			Expect(err).ToNot(HaveOccurred())
-			appliedWork.Status.AppliedResources = []workv1alpha1.AppliedResourceMeta{}
-			err = workClient.Update(context.Background(), &appliedWork)
-			Expect(err).ToNot(HaveOccurred())
+			Eventually(func() error {
+				err := workClient.Get(context.Background(), types.NamespacedName{Name: workName, Namespace: workNamespace}, &appliedWork)
+				Expect(err).ToNot(HaveOccurred())
+
+				appliedWork.Status.AppliedResources = []workv1alpha1.AppliedResourceMeta{}
+				err = workClient.Update(context.Background(), &appliedWork)
+
+				return err
+			}, timeout, interval).ShouldNot(HaveOccurred())
 
 			Eventually(func() bool {
 				err := workClient.Update(context.Background(), &appliedWork)
