@@ -26,8 +26,9 @@ type manifestDetails struct {
 }
 
 const (
-	eventuallyTimeout  = 30 // seconds
-	eventuallyInterval = 1  // seconds
+	eventuallyTimeout    = 30 // seconds
+	eventuallyInterval   = 1  // seconds
+	defaultWorkNamespace = "default"
 )
 
 var _ = Describe("Work creation", func() {
@@ -98,7 +99,7 @@ var WorkCreatedContext = func(description string, manifestFiles []string) bool {
 
 			workObj := createWorkObj(
 				utilrand.String(5),
-				"default",
+				defaultWorkNamespace,
 				mDetails,
 			)
 
@@ -154,7 +155,7 @@ var WorkCreatedWithCRDContext = func(description string, manifestFiles []string)
 
 			workObj := createWorkObj(
 				utilrand.String(5),
-				"default",
+				defaultWorkNamespace,
 				manifestDetails,
 			)
 
@@ -192,7 +193,7 @@ var WorkUpdateWithDependencyContext = func(description string, initialManifestFi
 
 			workObj := createWorkObj(
 				utilrand.String(5),
-				"default",
+				defaultWorkNamespace,
 				initialManifestDetails,
 			)
 
@@ -254,7 +255,7 @@ var WorkUpdateWithModifiedManifestContext = func(description string, manifestFil
 
 			workObj := createWorkObj(
 				utilrand.String(5),
-				"default",
+				defaultWorkNamespace,
 				manifestDetails,
 			)
 
@@ -314,7 +315,7 @@ var WorkUpdateWithReplacedManifestsContext = func(description string, originalMa
 
 			workObj := createWorkObj(
 				utilrand.String(5),
-				"default",
+				defaultWorkNamespace,
 				originalManifestDetails,
 			)
 
@@ -392,7 +393,7 @@ var WorkDeletedContext = func(description string, manifestFiles []string) bool {
 
 			workObj := createWorkObj(
 				utilrand.String(5),
-				"default",
+				defaultWorkNamespace,
 				manifestDetails,
 			)
 
@@ -438,13 +439,13 @@ var MultipleWorkWithSameManifestContext = func(description string, manifestFiles
 
 			workOne = createWorkObj(
 				utilrand.String(5),
-				"default",
+				defaultWorkNamespace,
 				manifestDetailsOne,
 			)
 
 			workTwo = createWorkObj(
 				utilrand.String(5),
-				"default",
+				defaultWorkNamespace,
 				manifestDetailsTwo)
 
 		})

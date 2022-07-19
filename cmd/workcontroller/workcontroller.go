@@ -20,6 +20,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -66,7 +67,7 @@ func main() {
 	flag.StringVar(&certDir, "webhook-cert-dir", "/k8s-webhook-server/serving-certs", "Admission webhook cert/key dir.")
 	flag.StringVar(&healthAddr, "health-addr", ":9440", "The address the health endpoint binds to.")
 	flag.StringVar(&hubkubeconfig, "hub-kubeconfig", "", "Paths to a kubeconfig connect to hub.")
-	flag.StringVar(&hubsecret, "hub-secret", "", "the name of the secret that contains the hub kubeconfig")
+	flag.StringVar(&hubsecret, "hub-kubeconfig-secret", "", "the name of the secret that contains the hub kubeconfig")
 	flag.StringVar(&workNamespace, "work-namespace", "", "Namespace to watch for work.")
 	flag.IntVar(&concurrentReconciles, "concurrency", 5, "max work reconciler concurrency")
 

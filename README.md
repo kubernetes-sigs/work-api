@@ -59,8 +59,8 @@ cd /tmp/work-api
 make docker-build
 kind load docker-image --name=cluster1 work-api-controller:latest
 kubectl apply -f deploy/component_namespace.yaml 
-kubectl delete secret hub-kubeconfig-secret -n work --ignore-not-found
-kubectl create secret generic hub-kubeconfig-secret --from-file=kubeconfig=hub-kubeconfig -n work 
+kubectl delete secret hub-kubeconfig-secret -n fleet-system --ignore-not-found
+kubectl create secret generic hub-kubeconfig-secret --from-file=kubeconfig=hub-kubeconfig -n fleet-system 
 rm hub-kubeconfig
 kubectl apply -k deploy
 ```
@@ -69,7 +69,7 @@ kubectl apply -k deploy
 ```shell
 kubectl delete secret hub-kubeconfig-secret -n fleet-system
 kubectl create secret generic hub-kubeconfig-secret --from-file=kubeconfig=/Users/ryanzhang/.kube/hub -n fleet-system
-go run cmd/workcontroller/workcontroller.go --work-namespace=cluster-a --hub-secret=hub-kubeconfig-secret
+go run cmd/workcontroller/workcontroller.go --work-namespace=default --hub-secret=hub-kubeconfig-secret
 ```
 
 
