@@ -43,18 +43,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
+	"sigs.k8s.io/work-api/pkg/utils"
 )
 
 const (
-	workFieldManagerName                 = "work-api-agent"
-	eventReasonNewManifestApplied        = "NewManifestApplied"
-	eventReasonReconciliationAggregated  = "WorkReconciliationAggregated"
-	eventReasonResourceNotFound          = "ResourceNotFound"
-	eventReasonResourceNotOwnedByWorkAPI = "ResourceNotOwnedByWorkAPI"
-	eventReasonUpdateWorkStatusFailed    = "UpdateWorkStatusFailed"
-	eventReasonUpdateWorkStatusSuccess   = "UpdateWorkStatusSuccessful"
-	eventReasonWorkResourcePatched       = "WorkResourcePatched"
-	eventReasonWorkResourcePatchFailed   = "WorkResourcePatchFailed"
+	messageWorkFinalizerMissing = "the Work resource has no finalizer yet, it will be added"
 )
 
 // ApplyWorkReconciler reconciles a Work object
@@ -67,6 +60,7 @@ type ApplyWorkReconciler struct {
 	concurrency        int
 }
 
+// applyResult contains the result of a manifest being applied.
 type applyResult struct {
 	identifier workv1alpha1.ResourceIdentifier
 	generation int64
@@ -76,7 +70,7 @@ type applyResult struct {
 
 // Reconcile implement the control loop logic for Work object.
 func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	klog.InfoS("work reconcile loop triggered", "item", req.NamespacedName)
+	klog.InfoS("Work apply controller reconcile loop triggered.", "item", req.NamespacedName)
 
 	work := &workv1alpha1.Work{}
 	err := r.client.Get(ctx, req.NamespacedName, work)
@@ -86,26 +80,28 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	case err != nil:
 		return ctrl.Result{}, err
 	}
+	kLogObjRef := klog.KObj(work)
 
 	// do nothing if the finalizer is not present
 	// it ensures all maintained resources will be cleaned once work is deleted
 	if !controllerutil.ContainsFinalizer(work, workFinalizer) {
-		klog.InfoS("the work has no finalizer yet, the work finalizer will create it", "item", req.NamespacedName)
+		klog.InfoS(messageWorkFinalizerMissing, work.Kind, kLogObjRef)
 		return ctrl.Result{}, nil
 	}
 
 	// leave the finalizer to clean up
 	if !work.DeletionTimestamp.IsZero() {
-		klog.InfoS("the work is being deleted, the work finalizer will garbage collect the resource", "item", req.NamespacedName)
+		klog.InfoS(utils.MessageResourceDeleting, work.Kind, kLogObjRef)
 		return ctrl.Result{}, nil
 	}
 
-	// we created the AppliedWork before setting the finalizer, it should already exist
+	// We created the AppliedWork before setting the finalizer, it should already exist.
+	// The AppliedWork.Name shall match its respective Work resource.
 	appliedWork := &workv1alpha1.AppliedWork{}
-	if err := r.spokeClient.Get(ctx, types.NamespacedName{Name: req.Name}, appliedWork); err != nil {
-		klog.ErrorS(err, "failed to get the appliedWork", "name", req.Name)
-		r.recorder.Eventf(work, v1.EventTypeWarning, eventReasonResourceNotFound, "AppliedWork not found for Work %s", work.GetName())
-		return ctrl.Result{}, errors.Wrap(err, fmt.Sprintf("failed to get the appliedWork %s", req.Name))
+	if err := r.spokeClient.Get(ctx, types.NamespacedName{Name: kLogObjRef.Name}, appliedWork); err != nil {
+		klog.ErrorS(err, utils.MessageResourceRetrieveFailed, "AppliedWork", kLogObjRef.Name)
+
+		return ctrl.Result{}, errors.Wrap(err, fmt.Sprintf(utils.MessageResourceRetrieveFailed+", %s=%s", "AppliedWork", work.Name))
 	}
 
 	owner := metav1.OwnerReference{
@@ -116,19 +112,21 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	results := r.applyManifests(ctx, work.Spec.Workload.Manifests, owner)
-	errs := []error{}
+	var errs []error
 
-	// Update manifestCondition based on the results
+	// Update manifestCondition based on the results.
 	var manifestConditions []workv1alpha1.ManifestCondition
 	for _, result := range results {
 		if result.err != nil {
 			errs = append(errs, result.err)
 		}
+
 		appliedCondition := buildAppliedStatusCondition(result.err, result.generation)
 		manifestCondition := workv1alpha1.ManifestCondition{
 			Identifier: result.identifier,
 			Conditions: []metav1.Condition{appliedCondition},
 		}
+
 		foundmanifestCondition := findManifestConditionByIdentifier(result.identifier, work.Status.ManifestConditions)
 		if foundmanifestCondition != nil {
 			manifestCondition.Conditions = foundmanifestCondition.Conditions
@@ -145,22 +143,33 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	err = r.client.Status().Update(ctx, work, &client.UpdateOptions{})
 	if err != nil {
-		klog.ErrorS(err, "update work status failed", "work", req.NamespacedName)
-		r.recorder.Eventf(work, v1.EventTypeWarning, eventReasonUpdateWorkStatusFailed, "Updating Work %s failed", work.GetName())
+		klog.ErrorS(err, utils.MessageResourceStatusUpdateFailed, work.Kind, kLogObjRef)
 		errs = append(errs, err)
 	} else {
-		r.recorder.Eventf(work, v1.EventTypeNormal, eventReasonUpdateWorkStatusSuccess, "Updating Work %s successful", work.GetName())
+		klog.InfoS(utils.MessageResourceStatusUpdateSucceeded, work.Kind, kLogObjRef)
 	}
 
 	if len(errs) != 0 {
-		klog.InfoS("we didn't apply all the manifest works successfully, queue the next reconcile", "work", req.NamespacedName)
-		r.recorder.Eventf(work, v1.EventTypeWarning, eventReasonReconciliationAggregated, "Not all Manifest for Work %s were applied, queueing next reconciliation", work.GetName())
+		klog.InfoS(utils.MessageManifestApplyIncomplete, work.Kind, kLogObjRef)
+		r.recorder.Event(
+			work,
+			v1.EventTypeWarning,
+			utils.EventReasonReconcileIncomplete,
+			utils.MessageManifestApplyIncomplete)
+
 		return ctrl.Result{}, utilerrors.NewAggregate(errs)
 	}
+
+	r.recorder.Event(
+		work,
+		v1.EventTypeNormal,
+		utils.EventReasonReconcileComplete,
+		utils.MessageManifestApplyComplete)
 
 	return ctrl.Result{}, nil
 }
 
+// applyManifests processes a given set of Manifests by: setting ownership, validating the manifest, and passing it on for application to the cluster.
 func (r *ApplyWorkReconciler) applyManifests(ctx context.Context, manifests []workv1alpha1.Manifest, owner metav1.OwnerReference) []applyResult {
 	var results []applyResult
 
@@ -168,24 +177,28 @@ func (r *ApplyWorkReconciler) applyManifests(ctx context.Context, manifests []wo
 		result := applyResult{
 			identifier: workv1alpha1.ResourceIdentifier{Ordinal: index},
 		}
-		gvr, rawObj, err := r.decodeUnstructured(manifest)
+		gvr, rawObj, err := r.decodeManifest(manifest)
 		if err != nil {
 			result.err = err
 		} else {
 			var obj *unstructured.Unstructured
 			result.identifier = buildResourceIdentifier(index, rawObj, gvr)
+			kLogObjRef := klog.ObjectRef{
+				Name:      result.identifier.Name,
+				Namespace: result.identifier.Namespace,
+			}
 			// TODO: add webhooks to block any manifest that has owner reference
 			rawObj.SetOwnerReferences([]metav1.OwnerReference{owner})
 			obj, result.updated, result.err = r.applyUnstructured(ctx, gvr, rawObj)
 			if result.err == nil {
 				result.generation = obj.GetGeneration()
 				if result.updated {
-					klog.V(5).InfoS("applied an unstructrued object", "gvr", gvr, "obj", obj.GetName(), "new observedGeneration", result.generation)
+					klog.V(5).InfoS(utils.MessageManifestApplySucceeded, "gvr", gvr, "obj", kLogObjRef, "new ObservedGeneration", result.generation)
 				} else {
-					klog.V(8).InfoS("object spec has not changed", "gvr", gvr, "obj", obj.GetName())
+					klog.V(8).InfoS(utils.MessageManifestApplyUnwarranted, "gvr", gvr, "obj", kLogObjRef)
 				}
 			} else {
-				klog.ErrorS(err, "Failed to apply an unstructrued object", "gvr", gvr, "obj", rawObj.GetName())
+				klog.ErrorS(err, utils.MessageManifestApplyFailed, "gvr", gvr, "obj", kLogObjRef)
 			}
 		}
 		results = append(results, result)
@@ -193,38 +206,43 @@ func (r *ApplyWorkReconciler) applyManifests(ctx context.Context, manifests []wo
 	return results
 }
 
-func (r *ApplyWorkReconciler) decodeUnstructured(manifest workv1alpha1.Manifest) (schema.GroupVersionResource, *unstructured.Unstructured, error) {
+// Decodes the manifest into usable structs.
+func (r *ApplyWorkReconciler) decodeManifest(manifest workv1alpha1.Manifest) (schema.GroupVersionResource, *unstructured.Unstructured, error) {
 	unstructuredObj := &unstructured.Unstructured{}
 	err := unstructuredObj.UnmarshalJSON(manifest.Raw)
 	if err != nil {
 		return schema.GroupVersionResource{}, nil, fmt.Errorf("failed to decode object: %w", err)
 	}
+
 	mapping, err := r.restMapper.RESTMapping(unstructuredObj.GroupVersionKind().GroupKind(), unstructuredObj.GroupVersionKind().Version)
 	if err != nil {
-		return schema.GroupVersionResource{}, nil, fmt.Errorf("failed to find gvr from restmapping: %w", err)
+		return schema.GroupVersionResource{}, nil, fmt.Errorf("failed to find group/version/resource from restmapping: %w", err)
 	}
 
 	return mapping.Resource, unstructuredObj, nil
 }
 
+// Determines if an unstructured manifest object can & should be applied. If so, it applies (creates) the resource on the cluster.
 func (r *ApplyWorkReconciler) applyUnstructured(
 	ctx context.Context,
 	gvr schema.GroupVersionResource,
-	workObj *unstructured.Unstructured) (*unstructured.Unstructured, bool, error) {
-
-	err := setSpecHashAnnotation(workObj)
+	manifestObj *unstructured.Unstructured) (*unstructured.Unstructured, bool, error) {
+	kLogObjRef := klog.ObjectRef{
+		Name:      manifestObj.GetName(),
+		Namespace: manifestObj.GetName(),
+	}
+	err := setSpecHashAnnotation(manifestObj)
 	if err != nil {
 		return nil, false, err
 	}
 
 	curObj, err := r.spokeDynamicClient.
 		Resource(gvr).
-		Namespace(workObj.GetNamespace()).
-		Get(ctx, workObj.GetName(), metav1.GetOptions{})
+		Namespace(manifestObj.GetNamespace()).
+		Get(ctx, manifestObj.GetName(), metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		actual, err := r.spokeDynamicClient.Resource(gvr).Namespace(workObj.GetNamespace()).Create(
-			ctx, workObj, metav1.CreateOptions{FieldManager: workFieldManagerName})
-		r.recorder.Eventf(workObj, v1.EventTypeNormal, eventReasonNewManifestApplied, "Manifest Applied for Work %s", workObj.GetName())
+		actual, err := r.spokeDynamicClient.Resource(gvr).Namespace(manifestObj.GetNamespace()).Create(
+			ctx, manifestObj, metav1.CreateOptions{FieldManager: utils.WorkFieldManagerName})
 
 		return actual, true, err
 	}
@@ -232,38 +250,39 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 		return nil, false, err
 	}
 
-	if !hasSharedOwnerReference(curObj.GetOwnerReferences(), workObj.GetOwnerReferences()[0]) {
-		err = fmt.Errorf("object %s:%s is not owned by the work-api anymore", gvr, curObj.GetName())
-		klog.ErrorS(err, "Found an object that is not owned by the work-api")
-		r.recorder.Eventf(workObj, v1.EventTypeWarning, eventReasonResourceNotOwnedByWorkAPI, "Resource for %s not owned by the work api", workObj.GetName())
+	if !hasSharedOwnerReference(curObj.GetOwnerReferences(), manifestObj.GetOwnerReferences()[0]) {
+		err = errors.New(utils.MessageResourceStateInvalid)
+		klog.ErrorS(err, utils.MessageResourceNotOwnedByWorkAPI, "gvr", gvr, "obj", kLogObjRef)
+
 		return nil, false, err
 	}
 
-	// We only try to update the object if its spec hash value has changed
-	if workObj.GetAnnotations()[specHashAnnotation] != curObj.GetAnnotations()[specHashAnnotation] {
-		klog.V(5).InfoS("work object's specification has changed", "gvr", gvr, "obj", workObj.GetName(),
-			"new hash", workObj.GetAnnotations()[specHashAnnotation], "existingHash", curObj.GetAnnotations()[specHashAnnotation])
-		workObj.SetAnnotations(mergeMapOverrideWithDst(curObj.GetAnnotations(), workObj.GetAnnotations()))
-		workObj.SetLabels(mergeMapOverrideWithDst(curObj.GetLabels(), workObj.GetLabels()))
-		workObj.SetOwnerReferences(mergeOwnerReference(curObj.GetOwnerReferences(), workObj.GetOwnerReferences()))
+	// We only try to update the object if its spec hash value has changed.
+	if manifestObj.GetAnnotations()[specHashAnnotation] != curObj.GetAnnotations()[specHashAnnotation] {
+		klog.V(5).InfoS(
+			utils.MessageResourceSpecModified, "gvr", gvr, "obj", kLogObjRef,
+			"new hash", manifestObj.GetAnnotations()[specHashAnnotation],
+			"existing hash", curObj.GetAnnotations()[specHashAnnotation])
 
-		newData, err := workObj.MarshalJSON()
+		manifestObj.SetAnnotations(mergeMapOverrideWithDst(curObj.GetAnnotations(), manifestObj.GetAnnotations()))
+		manifestObj.SetLabels(mergeMapOverrideWithDst(curObj.GetLabels(), manifestObj.GetLabels()))
+		manifestObj.SetOwnerReferences(mergeOwnerReference(curObj.GetOwnerReferences(), manifestObj.GetOwnerReferences()))
+
+		newData, err := manifestObj.MarshalJSON()
 		if err != nil {
-			klog.ErrorS(err, "work object json marshal failed", "gvr", gvr, "obj", workObj.GetName())
+			klog.ErrorS(err, utils.MessageResourceJSONMarshalFailed, "gvr", gvr, "obj", kLogObjRef)
 			return nil, false, err
 		}
-		// Use severside apply to be safe
-		actual, err := r.spokeDynamicClient.Resource(gvr).Namespace(workObj.GetNamespace()).
-			Patch(ctx, workObj.GetName(), types.ApplyPatchType, newData,
-				metav1.PatchOptions{Force: pointer.Bool(true), FieldManager: workFieldManagerName})
+		// Use sever-side apply to be safe.
+		actual, err := r.spokeDynamicClient.Resource(gvr).Namespace(manifestObj.GetNamespace()).
+			Patch(ctx, manifestObj.GetName(), types.ApplyPatchType, newData,
+				metav1.PatchOptions{Force: pointer.Bool(true), FieldManager: utils.WorkFieldManagerName})
 		if err != nil {
-			klog.ErrorS(err, "work object patched failed", "gvr", gvr, "obj", workObj.GetName())
-			r.recorder.Eventf(workObj, v1.EventTypeWarning, eventReasonWorkResourcePatchFailed, "work resource patch failed for %s", workObj.GetName())
+			klog.ErrorS(err, utils.MessageResourcePatchFailed, "gvr", gvr, "obj", kLogObjRef)
 
 			return nil, false, err
 		}
-		klog.V(5).InfoS("work object patched", "gvr", gvr, "obj", workObj.GetName())
-		r.recorder.Eventf(workObj, v1.EventTypeWarning, eventReasonWorkResourcePatched, "work resource patch successful for %s", workObj.GetName())
+		klog.V(5).InfoS(utils.MessageResourcePatchSucceeded, "gvr", gvr, "obj", kLogObjRef)
 
 		return actual, true, err
 	}
@@ -340,9 +359,9 @@ func mergeOwnerReference(owners, newOwners []metav1.OwnerReference) []metav1.Own
 }
 
 // findManifestConditionByIdentifier return a ManifestCondition by identifier
-// 1. find the manifest condition with the whole identifier;
-// 2. if identifier only has ordinal and a matched cannot found, return nil
-// 3. try to find with properties other than ordinal in identifier
+// 1. Find the manifest condition with the whole identifier.
+// 2. If identifier only has ordinal, and a matched cannot be found, return nil.
+// 3. Try to find properties, other than the ordinal, within the identifier.
 func findManifestConditionByIdentifier(identifier workv1alpha1.ResourceIdentifier, manifestConditions []workv1alpha1.ManifestCondition) *workv1alpha1.ManifestCondition {
 	for _, manifestCondition := range manifestConditions {
 		if identifier == manifestCondition.Identifier {

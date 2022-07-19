@@ -110,7 +110,7 @@ func TestApplyManifest(t *testing.T) {
 	// DynamicClients
 	clientFailDynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
 	clientFailDynamicClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
-		return true, nil, errors.New("Failed to apply an unstructrued object")
+		return true, nil, errors.New(utils.MessageManifestApplyFailed)
 	})
 
 	testCases := map[string]struct {
@@ -164,7 +164,7 @@ func TestApplyManifest(t *testing.T) {
 			generation:   0,
 			updated:      false,
 			wantGvr:      emptyGvr,
-			wantErr:      errors.New("failed to find gvr from restmapping: test error: mapping does not exist."),
+			wantErr:      errors.New("failed to find group/version/resource from restmapping: test error: mapping does not exist."),
 		},
 		"manifest is in proper format/ should fail applyUnstructured": {
 			reconciler: ApplyWorkReconciler{
@@ -178,7 +178,7 @@ func TestApplyManifest(t *testing.T) {
 			generation:   0,
 			updated:      false,
 			wantGvr:      expectedGvr,
-			wantErr:      errors.New("Failed to apply an unstructrued object"),
+			wantErr:      errors.New(utils.MessageManifestApplyFailed),
 		},
 	}
 
@@ -310,7 +310,7 @@ func TestApplyUnstructured(t *testing.T) {
 			},
 			workObj:    correctObj.DeepCopy(),
 			resultBool: false,
-			resultErr:  errors.New("object apps/v1, Resource=Deployment:Deployment is not owned by the work-api anymore"),
+			resultErr:  errors.New(utils.MessageResourceStateInvalid),
 		},
 		"equal spec hash of current vs work object / succeed without updates": {
 			reconciler: ApplyWorkReconciler{
@@ -459,7 +459,7 @@ func TestReconcile(t *testing.T) {
 
 	clientFailDynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
 	clientFailDynamicClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
-		return true, nil, errors.New("Failed to apply an unstructrued object")
+		return true, nil, errors.New(utils.MessageManifestApplyFailed)
 	})
 
 	testCases := map[string]struct {
@@ -560,7 +560,7 @@ func TestReconcile(t *testing.T) {
 				recorder:   utils.NewFakeRecorder(1),
 			},
 			req:     req,
-			wantErr: errors.New("failed to get the appliedWork"),
+			wantErr: errors.New(utils.MessageResourceRetrieveFailed),
 		},
 		"ApplyManifest fails": {
 			reconciler: ApplyWorkReconciler{
@@ -581,14 +581,14 @@ func TestReconcile(t *testing.T) {
 				recorder:   utils.NewFakeRecorder(2),
 			},
 			req:     req,
-			wantErr: errors.New("Failed to apply an unstructrued object"),
+			wantErr: errors.New(utils.MessageManifestApplyFailed),
 		},
 		"client update fails": {
 			reconciler: ApplyWorkReconciler{
 				client: &test.MockClient{
 					MockGet: getMock,
 					MockStatusUpdate: func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
-						return errors.New("update work status failed")
+						return errors.New(utils.MessageResourceStatusUpdateFailed)
 					},
 				},
 				spokeDynamicClient: clientFailDynamicClient,
@@ -599,7 +599,7 @@ func TestReconcile(t *testing.T) {
 				recorder:   utils.NewFakeRecorder(2),
 			},
 			req:     req,
-			wantErr: errors.New("update work status failed"),
+			wantErr: errors.New(utils.MessageResourceStatusUpdateFailed),
 		},
 		"Happy Path": {
 			reconciler: ApplyWorkReconciler{

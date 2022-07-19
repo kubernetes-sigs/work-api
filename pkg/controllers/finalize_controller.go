@@ -32,13 +32,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
+	"sigs.k8s.io/work-api/pkg/utils"
 )
 
 const (
-	eventReasonAppliedWorkCreated = "AppliedWorkCreated"
-	eventReasonAppliedWorkDeleted = "AppliedWorkDeleted"
-	eventReasonFinalizerAdded     = "FinalizerAdded"
-	eventReasonFinalizerRemoved   = "FinalizerRemoved"
+	messageAppliedWorkFinalizerNotFound = "AppliedWork finalizer object does not exist yet, it will be created"
 )
 
 // FinalizeWorkReconciler reconciles a Work object for finalization
@@ -50,6 +48,8 @@ type FinalizeWorkReconciler struct {
 
 // Reconcile implement the control loop logic for finalizing Work object.
 func (r *FinalizeWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	klog.InfoS("Work finalize controller reconcile loop triggered.", "item", req.NamespacedName)
+
 	work := &workv1alpha1.Work{}
 	err := r.client.Get(ctx, types.NamespacedName{Name: req.Name, Namespace: req.Namespace}, work)
 	switch {
@@ -59,7 +59,7 @@ func (r *FinalizeWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	klog.InfoS("Finalize work reconcile loop triggered", "item", req.NamespacedName)
+	kLogObjRef := klog.KObj(work)
 
 	// cleanup finalizer and resources
 	if !work.DeletionTimestamp.IsZero() {
@@ -71,9 +71,9 @@ func (r *FinalizeWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		err = r.spokeClient.Get(ctx, req.NamespacedName, appliedWork)
 		if err != nil {
 			if errors.IsNotFound(err) {
-				klog.ErrorS(err, "the finalizer appliedWork object doesn't exist, we will add it back", "name", req.Name)
+				klog.ErrorS(err, messageAppliedWorkFinalizerNotFound, "AppliedWork", kLogObjRef.Name)
 			} else {
-				klog.ErrorS(err, "failed to get the  finalizer appliedWork", "name", req.Name)
+				klog.ErrorS(err, utils.MessageResourceRetrieveFailed, "AppliedWork", kLogObjRef.Name)
 				return ctrl.Result{}, err
 			}
 		} else {
@@ -82,7 +82,7 @@ func (r *FinalizeWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
-	klog.InfoS("appliedWork finalizer does not exist yet, we will create it", "item", req.NamespacedName)
+	klog.InfoS(messageAppliedWorkFinalizerNotFound, "AppliedWork", kLogObjRef.Name)
 	appliedWork = &workv1alpha1.AppliedWork{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: req.Name,
@@ -95,15 +95,21 @@ func (r *FinalizeWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	err = r.spokeClient.Create(ctx, appliedWork)
 	if err != nil && !errors.IsAlreadyExists(err) {
 		// if this conflicts, we'll simply try again later
-		klog.ErrorS(err, "failed to create the appliedWork", "name", req.Name)
+		klog.ErrorS(err, utils.MessageResourceCreateFailed, "AppliedWork", kLogObjRef.Name)
 		return ctrl.Result{}, err
 	}
+	r.recorder.Event(appliedWork, corev1.EventTypeNormal, utils.EventReasonAppliedWorkCreated, utils.MessageResourceCreateSucceeded)
 
-	r.recorder.Event(work, corev1.EventTypeNormal, eventReasonAppliedWorkCreated, "AppliedWork resource was created")
+	r.recorder.Event(work, corev1.EventTypeNormal, utils.EventReasonAppliedWorkCreated, "AppliedWork resource was created")
 	work.Finalizers = append(work.Finalizers, workFinalizer)
 
 	if err = r.client.Update(ctx, work, &client.UpdateOptions{}); err == nil {
-		r.recorder.Event(work, corev1.EventTypeNormal, eventReasonFinalizerAdded, "Work resource's finalizer added: "+workFinalizer)
+		r.recorder.Eventf(
+			work,
+			corev1.EventTypeNormal,
+			utils.EventReasonFinalizerAdded,
+			utils.MessageResourceFinalizerAdded+", finalizer=%s",
+			workFinalizer)
 	}
 
 	return ctrl.Result{}, r.client.Update(ctx, work, &client.UpdateOptions{})
@@ -118,19 +124,20 @@ func (r *FinalizeWorkReconciler) garbageCollectAppliedWork(ctx context.Context, 
 			Name: work.Name,
 		}, &appliedWork)
 		if err != nil {
+			klog.ErrorS(err, utils.MessageResourceRetrieveFailed, "AppliedWork", work.Name)
 			return ctrl.Result{}, err
 		}
 		err = r.spokeClient.Delete(ctx, &appliedWork, &client.DeleteOptions{PropagationPolicy: &deletePolicy})
 		if err != nil {
-			klog.ErrorS(err, "failed to delete the applied Work", work.Name)
+			klog.ErrorS(err, utils.MessageResourceDeleteFailed, "AppliedWork", work.Name)
 			return ctrl.Result{}, err
 		}
 
-		r.recorder.Event(work, corev1.EventTypeNormal, eventReasonAppliedWorkDeleted, "AppliedWork was deleted")
-		klog.Infof("Removed the applied Work %s", work.Name)
+		r.recorder.Eventf(work, corev1.EventTypeNormal, utils.EventReasonAppliedWorkDeleted, utils.MessageResourceDeleteSucceeded+", AppliedWork=%s", work.Name)
+		klog.InfoS(utils.MessageResourceDeleteSucceeded, "AppliedWork", work.Name)
 
 		controllerutil.RemoveFinalizer(work, workFinalizer)
-		r.recorder.Event(work, corev1.EventTypeNormal, eventReasonFinalizerRemoved, "Work resource's finalizer removed: "+workFinalizer)
+		r.recorder.Eventf(work, corev1.EventTypeNormal, utils.EventReasonFinalizerRemoved, utils.MessageResourceFinalizerRemoved+", finalizer="+workFinalizer)
 	}
 
 	return ctrl.Result{}, r.client.Update(ctx, work, &client.UpdateOptions{})
