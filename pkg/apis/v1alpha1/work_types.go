@@ -22,6 +22,7 @@ import (
 )
 
 const WorkKind = "Work"
+const WorkResource = "works"
 
 // WorkSpec defines the desired state of Work
 type WorkSpec struct {
