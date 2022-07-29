@@ -20,9 +20,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"testing"
-	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -31,6 +29,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/envtest/printer"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -50,8 +49,6 @@ var (
 	setupLog      = ctrl.Log.WithName("test")
 	ctx           context.Context
 	cancel        context.CancelFunc
-	timeout       = 45 * time.Second
-	poll          = 5 * time.Second
 )
 
 func TestAPIs(t *testing.T) {
@@ -106,7 +103,6 @@ var _ = BeforeSuite(func(done Done) {
 var _ = AfterSuite(func() {
 	cancel()
 	By("tearing down the test environment")
-	Eventually(func() error {
-		return testEnv.Stop()
-	}, timeout, poll).ShouldNot(HaveOccurred())
+	err := testEnv.Stop()
+	Expect(err).ToNot(HaveOccurred())
 })
