@@ -17,10 +17,9 @@ limitations under the License.
 package controllers
 
 import (
-	"fmt"
+	"context"
 	"os"
 	"path/filepath"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"testing"
 
 	. "github.com/onsi/ginkgo"
@@ -30,6 +29,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/envtest/printer"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -47,6 +47,8 @@ var (
 	dynamicClient dynamic.Interface
 	testEnv       *envtest.Environment
 	setupLog      = ctrl.Log.WithName("test")
+	ctx           context.Context
+	cancel        context.CancelFunc
 )
 
 func TestAPIs(t *testing.T) {
@@ -87,11 +89,11 @@ var _ = BeforeSuite(func(done Done) {
 	Expect(err).NotTo(HaveOccurred())
 
 	go func() {
-		if err := Start(ctrl.SetupSignalHandler(), cfg, cfg, setupLog, opts); err != nil {
+		ctx, cancel = context.WithCancel(context.Background())
+		if err := Start(ctx, cfg, cfg, setupLog, opts); err != nil {
 			setupLog.Error(err, "problem running controllers")
 			os.Exit(1)
 		}
-		fmt.Printf("failed to start manager, %v\n", err)
 		Expect(err).ToNot(HaveOccurred())
 	}()
 
@@ -99,6 +101,7 @@ var _ = BeforeSuite(func(done Done) {
 }, 60)
 
 var _ = AfterSuite(func() {
+	cancel()
 	By("tearing down the test environment")
 	err := testEnv.Stop()
 	Expect(err).ToNot(HaveOccurred())
