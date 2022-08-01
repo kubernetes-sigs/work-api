@@ -100,7 +100,10 @@ reviewable: manifests generate fmt vet lint staticcheck ## Runs a series of sour
 ##@ Verify
 
 .PHONY: test
-test: generate fmt vet manifests ensure-kubebuilder-tools ## Run tests.
+test: generate fmt vet manifests local-unit-test ## Run tests.
+
+.PHONY: local-unit-test
+local-unit-test: ensure-kubebuilder-tools
 	go test ./pkg/... -coverprofile cover.out
 
 .PHONY: verify

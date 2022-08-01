@@ -121,7 +121,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			errs = append(errs, result.err)
 		}
 
-		appliedCondition := buildAppliedStatusCondition(result.err, result.generation)
+		appliedCondition := buildAppliedStatusCondition(result.err, result.updated, result.generation)
 		manifestCondition := workv1alpha1.ManifestCondition{
 			Identifier: result.identifier,
 			Conditions: []metav1.Condition{appliedCondition},
@@ -139,7 +139,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Update status condition of work
 	workCond := generateWorkAppliedStatusCondition(manifestConditions, work.Generation)
-	meta.SetStatusCondition(&work.Status.Conditions, workCond)
+	work.Status.Conditions = []metav1.Condition{workCond}
 
 	err = r.client.Status().Update(ctx, work, &client.UpdateOptions{})
 	if err != nil {
@@ -193,7 +193,7 @@ func (r *ApplyWorkReconciler) applyManifests(ctx context.Context, manifests []wo
 			if result.err == nil {
 				result.generation = obj.GetGeneration()
 				if result.updated {
-					klog.V(5).InfoS(utils.MessageManifestApplySucceeded, "gvr", gvr, "obj", kLogObjRef, "new ObservedGeneration", result.generation)
+					klog.V(4).InfoS(utils.MessageManifestApplySucceeded, "gvr", gvr, "obj", kLogObjRef, "new ObservedGeneration", result.generation)
 				} else {
 					klog.V(8).InfoS(utils.MessageManifestApplyUnwarranted, "gvr", gvr, "obj", kLogObjRef)
 				}
@@ -416,7 +416,7 @@ func buildResourceIdentifier(index int, object *unstructured.Unstructured, gvr s
 	return identifier
 }
 
-func buildAppliedStatusCondition(err error, observedGeneration int64) metav1.Condition {
+func buildAppliedStatusCondition(err error, updated bool, observedGeneration int64) metav1.Condition {
 	if err != nil {
 		return metav1.Condition{
 			Type:               ConditionTypeApplied,
@@ -427,6 +427,16 @@ func buildAppliedStatusCondition(err error, observedGeneration int64) metav1.Con
 		}
 	}
 
+	if updated {
+		return metav1.Condition{
+			Type:               ConditionTypeApplied,
+			Status:             metav1.ConditionTrue,
+			LastTransitionTime: metav1.Now(),
+			ObservedGeneration: observedGeneration,
+			Reason:             "appliedManifest updated",
+			Message:            "appliedManifest updated",
+		}
+	}
 	return metav1.Condition{
 		Type:               ConditionTypeApplied,
 		Status:             metav1.ConditionTrue,
@@ -445,6 +455,7 @@ func generateWorkAppliedStatusCondition(manifestConditions []workv1alpha1.Manife
 			return metav1.Condition{
 				Type:               ConditionTypeApplied,
 				Status:             metav1.ConditionFalse,
+				LastTransitionTime: metav1.Now(),
 				Reason:             "AppliedWorkFailed",
 				Message:            "Failed to apply work",
 				ObservedGeneration: observedGeneration,
@@ -455,6 +466,7 @@ func generateWorkAppliedStatusCondition(manifestConditions []workv1alpha1.Manife
 	return metav1.Condition{
 		Type:               ConditionTypeApplied,
 		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
 		Reason:             "AppliedWorkComplete",
 		Message:            "Apply work complete",
 		ObservedGeneration: observedGeneration,
