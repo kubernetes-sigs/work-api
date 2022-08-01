@@ -66,7 +66,7 @@ func (r *FinalizeWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return r.garbageCollectAppliedWork(ctx, work)
 	}
 
-	var appliedWork *workv1alpha1.AppliedWork
+	appliedWork := &workv1alpha1.AppliedWork{}
 	if controllerutil.ContainsFinalizer(work, workFinalizer) {
 		err = r.spokeClient.Get(ctx, req.NamespacedName, appliedWork)
 		if err != nil {
