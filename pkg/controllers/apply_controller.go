@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/pkg/errors"
 	v1 "k8s.io/api/core/v1"
@@ -166,7 +167,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		utils.EventReasonReconcileComplete,
 		utils.MessageManifestApplyComplete)
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
 }
 
 // applyManifests processes a given set of Manifests by: setting ownership, validating the manifest, and passing it on for application to the cluster.

@@ -466,6 +466,7 @@ func TestReconcile(t *testing.T) {
 		reconciler ApplyWorkReconciler
 		req        ctrl.Request
 		wantErr    error
+		requeue    bool
 	}{
 		"work cannot be retrieved, client failed due to client error": {
 			reconciler: ApplyWorkReconciler{
@@ -618,6 +619,7 @@ func TestReconcile(t *testing.T) {
 			},
 			req:     req,
 			wantErr: nil,
+			requeue: true,
 		},
 	}
 	for testName, testCase := range testCases {
@@ -626,6 +628,9 @@ func TestReconcile(t *testing.T) {
 			if testCase.wantErr != nil {
 				assert.Containsf(t, err.Error(), testCase.wantErr.Error(), "incorrect error for Testcase %s", testName)
 			} else {
+				if testCase.requeue {
+					assert.Equal(t, ctrl.Result{RequeueAfter: time.Minute * 5}, ctrlResult, "incorrect ctrlResult for Testcase %s", testName)
+				}
 				assert.Equalf(t, false, ctrlResult.Requeue, "incorrect ctrlResult for Testcase %s", testName)
 			}
 		})
