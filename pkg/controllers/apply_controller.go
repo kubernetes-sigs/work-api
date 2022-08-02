@@ -101,6 +101,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	appliedWork := &workv1alpha1.AppliedWork{}
 	if err := r.spokeClient.Get(ctx, types.NamespacedName{Name: kLogObjRef.Name}, appliedWork); err != nil {
 		klog.ErrorS(err, utils.MessageResourceRetrieveFailed, "AppliedWork", kLogObjRef.Name)
+		meta.SetStatusCondition(&work.Status.Conditions, generateWorkAvailableStatusCondition(metav1.ConditionFalse, work.Generation))
 
 		return ctrl.Result{}, errors.Wrap(err, fmt.Sprintf(utils.MessageResourceRetrieveFailed+", %s=%s", "AppliedWork", work.Name))
 	}
@@ -138,9 +139,11 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	work.Status.ManifestConditions = manifestConditions
 
-	// Update status condition of work
 	workCond := generateWorkAppliedStatusCondition(manifestConditions, work.Generation)
 	work.Status.Conditions = []metav1.Condition{workCond}
+
+	//Update available status condition of work
+	meta.SetStatusCondition(&work.Status.Conditions, generateWorkAvailableStatusCondition(workCond.Status, work.Generation))
 
 	err = r.client.Status().Update(ctx, work, &client.UpdateOptions{})
 	if err != nil {
@@ -470,6 +473,28 @@ func generateWorkAppliedStatusCondition(manifestConditions []workv1alpha1.Manife
 		LastTransitionTime: metav1.Now(),
 		Reason:             "AppliedWorkComplete",
 		Message:            "Apply work complete",
+		ObservedGeneration: observedGeneration,
+	}
+}
+
+func generateWorkAvailableStatusCondition(status metav1.ConditionStatus, observedGeneration int64) metav1.Condition {
+	if status == metav1.ConditionTrue {
+		return metav1.Condition{
+			Type:               ConditionTypeAvailable,
+			Status:             metav1.ConditionTrue,
+			LastTransitionTime: metav1.Now(),
+			Reason:             "AppliedWorkAvailable",
+			Message:            "This workload is available",
+			ObservedGeneration: observedGeneration,
+		}
+	}
+
+	return metav1.Condition{
+		Type:               ConditionTypeAvailable,
+		Status:             metav1.ConditionFalse,
+		LastTransitionTime: metav1.Now(),
+		Reason:             "AppliedWorkFailed",
+		Message:            "This workload is not fully available",
 		ObservedGeneration: observedGeneration,
 	}
 }

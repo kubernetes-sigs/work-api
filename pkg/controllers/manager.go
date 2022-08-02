@@ -33,7 +33,8 @@ const (
 	workFinalizer      = "multicluster.x-k8s.io/work-cleanup"
 	specHashAnnotation = "multicluster.x-k8s.io/spec-hash"
 
-	ConditionTypeApplied = "Applied"
+	ConditionTypeApplied   = "Applied"
+	ConditionTypeAvailable = "Available"
 
 	// number of concurrent reconcile loop for work
 	maxWorkConcurrency = 5
