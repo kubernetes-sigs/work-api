@@ -426,7 +426,7 @@ func buildAppliedStatusCondition(err error, updated bool, observedGeneration int
 			Type:               ConditionTypeApplied,
 			Status:             metav1.ConditionFalse,
 			LastTransitionTime: metav1.Now(),
-			Reason:             "AppliedManifestFailed",
+			Reason:             "appliedManifestFailed",
 			Message:            fmt.Sprintf("Failed to apply manifest: %v", err),
 		}
 	}
@@ -437,7 +437,7 @@ func buildAppliedStatusCondition(err error, updated bool, observedGeneration int
 			Status:             metav1.ConditionTrue,
 			LastTransitionTime: metav1.Now(),
 			ObservedGeneration: observedGeneration,
-			Reason:             "appliedManifest updated",
+			Reason:             "appliedManifestUpdated",
 			Message:            "appliedManifest updated",
 		}
 	}
@@ -446,7 +446,7 @@ func buildAppliedStatusCondition(err error, updated bool, observedGeneration int
 		Status:             metav1.ConditionTrue,
 		LastTransitionTime: metav1.Now(),
 		ObservedGeneration: observedGeneration,
-		Reason:             "AppliedManifestComplete",
+		Reason:             "appliedManifestComplete",
 		Message:            "Apply manifest complete",
 	}
 }
@@ -460,7 +460,7 @@ func generateWorkAppliedStatusCondition(manifestConditions []workv1alpha1.Manife
 				Type:               ConditionTypeApplied,
 				Status:             metav1.ConditionFalse,
 				LastTransitionTime: metav1.Now(),
-				Reason:             "AppliedWorkFailed",
+				Reason:             "appliedWorkFailed",
 				Message:            "Failed to apply work",
 				ObservedGeneration: observedGeneration,
 			}
@@ -471,7 +471,7 @@ func generateWorkAppliedStatusCondition(manifestConditions []workv1alpha1.Manife
 		Type:               ConditionTypeApplied,
 		Status:             metav1.ConditionTrue,
 		LastTransitionTime: metav1.Now(),
-		Reason:             "AppliedWorkComplete",
+		Reason:             "appliedWorkComplete",
 		Message:            "Apply work complete",
 		ObservedGeneration: observedGeneration,
 	}
@@ -483,7 +483,7 @@ func generateWorkAvailableStatusCondition(status metav1.ConditionStatus, observe
 			Type:               ConditionTypeAvailable,
 			Status:             metav1.ConditionTrue,
 			LastTransitionTime: metav1.Now(),
-			Reason:             "AppliedWorkAvailable",
+			Reason:             "appliedWorkAvailable",
 			Message:            "This workload is available",
 			ObservedGeneration: observedGeneration,
 		}
@@ -493,7 +493,7 @@ func generateWorkAvailableStatusCondition(status metav1.ConditionStatus, observe
 		Type:               ConditionTypeAvailable,
 		Status:             metav1.ConditionFalse,
 		LastTransitionTime: metav1.Now(),
-		Reason:             "AppliedWorkFailed",
+		Reason:             "appliedWorkFailed",
 		Message:            "This workload is not fully available",
 		ObservedGeneration: observedGeneration,
 	}

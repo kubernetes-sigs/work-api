@@ -98,7 +98,7 @@ var WorkCreatedContext = func(description string, manifestFiles []string) bool {
 			mDetails = generateManifestDetails(manifestFiles)
 
 			workObj := createWorkObj(
-				utilrand.String(5),
+				getWorkName(5),
 				defaultWorkNamespace,
 				mDetails,
 			)
@@ -140,6 +140,17 @@ var WorkCreatedContext = func(description string, manifestFiles []string) bool {
 
 				return err
 			}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+
+			By("verifying that corresponding conditions were created")
+			Eventually(func() bool {
+				work, err := retrieveWork(createdWork.Namespace, createdWork.Name)
+				if err != nil {
+					return false
+				}
+				appliedCondition := meta.IsStatusConditionTrue(work.Status.Conditions, "Applied")
+				availableCondition := meta.IsStatusConditionTrue(work.Status.Conditions, "Available")
+				return appliedCondition && availableCondition
+			}, eventuallyTimeout, eventuallyInterval).Should(BeTrue())
 		})
 	})
 }
@@ -154,7 +165,7 @@ var WorkCreatedWithCRDContext = func(description string, manifestFiles []string)
 			manifestDetails = generateManifestDetails(manifestFiles)
 
 			workObj := createWorkObj(
-				utilrand.String(5),
+				getWorkName(5),
 				defaultWorkNamespace,
 				manifestDetails,
 			)
@@ -192,7 +203,7 @@ var WorkUpdateWithDependencyContext = func(description string, initialManifestFi
 			addedManifestDetails = generateManifestDetails(addedManifestFiles)
 
 			workObj := createWorkObj(
-				utilrand.String(5),
+				getWorkName(5),
 				defaultWorkNamespace,
 				initialManifestDetails,
 			)
@@ -250,11 +261,11 @@ var WorkUpdateWithModifiedManifestContext = func(description string, manifestFil
 
 		BeforeEach(func() {
 			manifestDetails = generateManifestDetails(manifestFiles)
-			newDataKey = utilrand.String(5)
-			newDataValue = utilrand.String(5)
+			newDataKey = getWorkName(5)
+			newDataValue = getWorkName(5)
 
 			workObj := createWorkObj(
-				utilrand.String(5),
+				getWorkName(5),
 				defaultWorkNamespace,
 				manifestDetails,
 			)
@@ -314,7 +325,7 @@ var WorkUpdateWithReplacedManifestsContext = func(description string, originalMa
 			replacedManifestDetails = generateManifestDetails(replacedManifestFiles)
 
 			workObj := createWorkObj(
-				utilrand.String(5),
+				getWorkName(5),
 				defaultWorkNamespace,
 				originalManifestDetails,
 			)
@@ -392,7 +403,7 @@ var WorkDeletedContext = func(description string, manifestFiles []string) bool {
 			manifestDetails = generateManifestDetails(manifestFiles)
 
 			workObj := createWorkObj(
-				utilrand.String(5),
+				getWorkName(5),
 				defaultWorkNamespace,
 				manifestDetails,
 			)
@@ -438,13 +449,13 @@ var MultipleWorkWithSameManifestContext = func(description string, manifestFiles
 			manifestDetailsTwo = generateManifestDetails(manifestFiles)
 
 			workOne = createWorkObj(
-				utilrand.String(5),
+				getWorkName(5),
 				defaultWorkNamespace,
 				manifestDetailsOne,
 			)
 
 			workTwo = createWorkObj(
-				utilrand.String(5),
+				getWorkName(5),
 				defaultWorkNamespace,
 				manifestDetailsTwo)
 
@@ -604,4 +615,8 @@ func updateWork(work *workapi.Work) (*workapi.Work, error) {
 		return nil, err
 	}
 	return updatedWork, err
+}
+
+func getWorkName(length int) string {
+	return "work" + utilrand.String(length)
 }
