@@ -18,7 +18,6 @@ package controllers
 
 import (
 	"context"
-
 	"github.com/pkg/errors"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -47,7 +46,7 @@ type WorkStatusReconciler struct {
 	concurrency int
 }
 
-func newWorkStatusReconciler(hubClient client.Client, spokeClient client.Client, spokeDynamicClient dynamic.Interface, restMapper meta.RESTMapper, recorder record.EventRecorder, concurrency int) *WorkStatusReconciler {
+func NewWorkStatusReconciler(hubClient client.Client, spokeDynamicClient dynamic.Interface, spokeClient client.Client, restMapper meta.RESTMapper, recorder record.EventRecorder, concurrency int) *WorkStatusReconciler {
 	return &WorkStatusReconciler{
 		appliedResourceTracker: appliedResourceTracker{
 			hubClient:          hubClient,

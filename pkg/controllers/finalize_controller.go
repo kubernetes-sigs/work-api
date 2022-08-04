@@ -46,6 +46,14 @@ type FinalizeWorkReconciler struct {
 	recorder    record.EventRecorder
 }
 
+func NewFinalizeWorkReconciler(hubClient client.Client, spokeClient client.Client, recorder record.EventRecorder) *FinalizeWorkReconciler {
+	return &FinalizeWorkReconciler{
+		client:      hubClient,
+		spokeClient: spokeClient,
+		recorder:    recorder,
+	}
+}
+
 // Reconcile implement the control loop logic for finalizing Work object.
 func (r *FinalizeWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	klog.InfoS("Work finalize controller reconcile loop triggered.", "item", req.NamespacedName)

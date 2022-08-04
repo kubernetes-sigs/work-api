@@ -61,6 +61,17 @@ type ApplyWorkReconciler struct {
 	concurrency        int
 }
 
+func NewApplyWorkReconciler(hubClient client.Client, spokeDynamicClient dynamic.Interface, spokeClient client.Client, restMapper meta.RESTMapper, recorder record.EventRecorder, concurrency int) *ApplyWorkReconciler {
+	return &ApplyWorkReconciler{
+		client:             hubClient,
+		spokeDynamicClient: spokeDynamicClient,
+		spokeClient:        spokeClient,
+		restMapper:         restMapper,
+		recorder:           recorder,
+		concurrency:        concurrency,
+	}
+}
+
 // applyResult contains the result of a manifest being applied.
 type applyResult struct {
 	identifier workv1alpha1.ResourceIdentifier
