@@ -92,7 +92,7 @@ generate: ## Run generators for Deepcopy funcs and CRDs
 
 .PHONY: manifests
 manifests: ## Generate manifests e.g. CRD, RBAC etc.
-	$(CONTROLLER_GEN) $(CRD_OPTIONS) rbac:roleName=work-manager webhook schemapatch:manifests="config/crd-base" paths="./pkg/apis/v1alpha1" output:crd:none output:schemapatch:dir="config/crd"
+	$(CONTROLLER_GEN) $(CRD_OPTIONS) rbac:roleName=work-manager webhook schemapatch:manifests="config/crd-base" paths="./pkg/apis/v1alpha1" output:crd:none output:crd:dir="config/crd"
 
 reviewable: manifests generate fmt vet lint staticcheck ## Runs a series of source code checks.
 	go mod tidy
