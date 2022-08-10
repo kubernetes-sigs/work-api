@@ -76,6 +76,7 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 		restMapper,
 		hubMgr.GetEventRecorderFor("work_status_controller"),
 		maxWorkConcurrency,
+		true,
 	).SetupWithManager(hubMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkStatus")
 		return err
@@ -88,6 +89,7 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 		restMapper,
 		hubMgr.GetEventRecorderFor("work_controller"),
 		maxWorkConcurrency,
+		true,
 	).SetupWithManager(hubMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Work")
 		return err
@@ -97,6 +99,7 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 		hubMgr.GetClient(),
 		spokeClient,
 		hubMgr.GetEventRecorderFor("WorkFinalizer_controller"),
+		true,
 	).SetupWithManager(hubMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkFinalize")
 		return err

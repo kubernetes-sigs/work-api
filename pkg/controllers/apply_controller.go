@@ -59,9 +59,10 @@ type ApplyWorkReconciler struct {
 	restMapper         meta.RESTMapper
 	recorder           record.EventRecorder
 	concurrency        int
+	Joined             bool
 }
 
-func NewApplyWorkReconciler(hubClient client.Client, spokeDynamicClient dynamic.Interface, spokeClient client.Client, restMapper meta.RESTMapper, recorder record.EventRecorder, concurrency int) *ApplyWorkReconciler {
+func NewApplyWorkReconciler(hubClient client.Client, spokeDynamicClient dynamic.Interface, spokeClient client.Client, restMapper meta.RESTMapper, recorder record.EventRecorder, concurrency int, joined bool) *ApplyWorkReconciler {
 	return &ApplyWorkReconciler{
 		client:             hubClient,
 		spokeDynamicClient: spokeDynamicClient,
@@ -69,6 +70,7 @@ func NewApplyWorkReconciler(hubClient client.Client, spokeDynamicClient dynamic.
 		restMapper:         restMapper,
 		recorder:           recorder,
 		concurrency:        concurrency,
+		Joined:             joined,
 	}
 }
 
@@ -83,6 +85,11 @@ type applyResult struct {
 // Reconcile implement the control loop logic for Work object.
 func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	klog.InfoS("Work apply controller reconcile loop triggered.", "item", req.NamespacedName)
+
+	if !r.Joined {
+		klog.InfoS("work controller is not started yet")
+		return ctrl.Result{RequeueAfter: time.Second * 5}, fmt.Errorf("work controller is not started yet")
+	}
 
 	work := &workv1alpha1.Work{}
 	err := r.client.Get(ctx, req.NamespacedName, work)

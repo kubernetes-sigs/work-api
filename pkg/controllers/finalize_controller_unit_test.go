@@ -2,15 +2,18 @@ package controllers
 
 import (
 	"context"
-	"sigs.k8s.io/work-api/pkg/utils"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/crossplane/crossplane-runtime/pkg/test"
 	"github.com/stretchr/testify/assert"
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/work-api/pkg/utils"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
@@ -45,6 +48,35 @@ func TestGarbageCollectAppliedWork(t *testing.T) {
 
 			assert.False(t, controllerutil.ContainsFinalizer(tt.tw.mockWork, workFinalizer), "The Work object still contains a finalizer, it should not.")
 			assert.NoError(t, err, "An error occurred but none was expected.")
+		})
+	}
+}
+
+func TestFinalizerReconcile(t *testing.T) {
+
+	tests := map[string]struct {
+		r              FinalizeWorkReconciler
+		req            ctrl.Request
+		expectedResult ctrl.Result
+		expectedError  error
+	}{
+		"Controller not joined": {
+			r: FinalizeWorkReconciler{Joined: false},
+			req: ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Namespace: "work" + rand.String(5),
+					Name:      "work" + rand.String(5),
+				},
+			},
+			expectedResult: ctrl.Result{RequeueAfter: time.Second * 5},
+			expectedError:  fmt.Errorf("finalize controller is not started yet"),
+		},
+	}
+	for testName, tt := range tests {
+		t.Run(testName, func(t *testing.T) {
+			ctrlResult, err := tt.r.Reconcile(ctx, tt.req)
+			assert.Equalf(t, tt.expectedResult, ctrlResult, "wrong ctrlResult for testcase %s", testName)
+			assert.Equal(t, tt.expectedError, err)
 		})
 	}
 }
@@ -85,7 +117,9 @@ func generateTestWrapper() *TestWrapper {
 		mockReconciler: &FinalizeWorkReconciler{
 			client:      test.NewMockClient(),
 			recorder:    utils.NewFakeRecorder(2),
-			spokeClient: test.NewMockClient()},
+			spokeClient: test.NewMockClient(),
+			Joined:      true,
+		},
 		mockAppliedWork: mockAppliedWork,
 		mockWork:        mockWork,
 	}

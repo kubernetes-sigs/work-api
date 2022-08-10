@@ -18,6 +18,7 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"github.com/pkg/errors"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -34,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"time"
 
 	workapi "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 	"sigs.k8s.io/work-api/pkg/utils"
@@ -44,9 +46,10 @@ type WorkStatusReconciler struct {
 	appliedResourceTracker
 	recorder    record.EventRecorder
 	concurrency int
+	Joined      bool
 }
 
-func NewWorkStatusReconciler(hubClient client.Client, spokeDynamicClient dynamic.Interface, spokeClient client.Client, restMapper meta.RESTMapper, recorder record.EventRecorder, concurrency int) *WorkStatusReconciler {
+func NewWorkStatusReconciler(hubClient client.Client, spokeDynamicClient dynamic.Interface, spokeClient client.Client, restMapper meta.RESTMapper, recorder record.EventRecorder, concurrency int, joined bool) *WorkStatusReconciler {
 	return &WorkStatusReconciler{
 		appliedResourceTracker: appliedResourceTracker{
 			hubClient:          hubClient,
@@ -56,12 +59,18 @@ func NewWorkStatusReconciler(hubClient client.Client, spokeDynamicClient dynamic
 		},
 		recorder:    recorder,
 		concurrency: concurrency,
+		Joined:      joined,
 	}
 }
 
 // Reconcile implement the control loop logic for Work Status.
 func (r *WorkStatusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	klog.InfoS("Work Status controller reconcile loop triggered", "item", req.NamespacedName)
+
+	if !r.Joined {
+		klog.InfoS("work status controller is not started yet")
+		return ctrl.Result{RequeueAfter: time.Second * 5}, fmt.Errorf("work status controller is not started yet")
+	}
 
 	work, appliedWork, err := r.fetchWorks(ctx, req.NamespacedName)
 	if err != nil {

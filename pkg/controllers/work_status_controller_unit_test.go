@@ -1,12 +1,17 @@
 package controllers
 
 import (
+	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
+	ctrl "sigs.k8s.io/controller-runtime"
+
 	"sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
@@ -28,14 +33,14 @@ func TestCalculateNewAppliedWork(t *testing.T) {
 		expectedStaleRes []v1alpha1.AppliedResourceMeta
 	}{
 		"AppliedWork and Work has been garbage collected; AppliedWork and Work of a resource both does not exist": {
-			r:                WorkStatusReconciler{},
+			r:                WorkStatusReconciler{Joined: true},
 			inputWork:        inputWork,
 			inputAppliedWork: inputAppliedWork,
 			expectedNewRes:   []v1alpha1.AppliedResourceMeta(nil),
 			expectedStaleRes: []v1alpha1.AppliedResourceMeta(nil),
 		},
 		"AppliedWork and Work of a resource exists; there are nothing being deleted": {
-			r:                WorkStatusReconciler{},
+			r:                WorkStatusReconciler{Joined: true},
 			inputWork:        inputWorkWithResourceIdentifier,
 			inputAppliedWork: inputAppliedWorkWithResourceIdentifier,
 			expectedNewRes: []v1alpha1.AppliedResourceMeta{
@@ -47,7 +52,7 @@ func TestCalculateNewAppliedWork(t *testing.T) {
 			expectedStaleRes: []v1alpha1.AppliedResourceMeta(nil),
 		},
 		"Work resource has been deleted, but the corresponding AppliedWork remains": {
-			r:                WorkStatusReconciler{},
+			r:                WorkStatusReconciler{Joined: true},
 			inputWork:        inputWork,
 			inputAppliedWork: inputAppliedWorkWithResourceIdentifier,
 			expectedNewRes:   []v1alpha1.AppliedResourceMeta(nil),
@@ -59,7 +64,7 @@ func TestCalculateNewAppliedWork(t *testing.T) {
 			},
 		},
 		"Work resource contains the status of a resource that does not exist within the AppliedWork resource.": {
-			r:                WorkStatusReconciler{},
+			r:                WorkStatusReconciler{Joined: true},
 			inputWork:        inputWorkWithResourceIdentifier,
 			inputAppliedWork: inputAppliedWork,
 			expectedNewRes: []v1alpha1.AppliedResourceMeta{
@@ -75,6 +80,35 @@ func TestCalculateNewAppliedWork(t *testing.T) {
 			newRes, staleRes := tt.r.calculateNewAppliedWork(&tt.inputWork, &tt.inputAppliedWork)
 			assert.Equalf(t, tt.expectedNewRes, newRes, "Testcase %s: NewRes is different from what it should be.", testName)
 			assert.Equalf(t, tt.expectedStaleRes, staleRes, "Testcase %s: StaleRes is different from what it should be.", testName)
+		})
+	}
+}
+
+func TestStop(t *testing.T) {
+	testCases := map[string]struct {
+		reconciler WorkStatusReconciler
+		ctrlResult ctrl.Result
+		wantErr    error
+	}{
+		"controller is being stopped": {
+			reconciler: WorkStatusReconciler{
+				Joined: false,
+			},
+			ctrlResult: ctrl.Result{RequeueAfter: time.Second * 5},
+			wantErr:    fmt.Errorf("work status controller is not started yet"),
+		},
+	}
+
+	for testName, testCase := range testCases {
+		t.Run(testName, func(t *testing.T) {
+			ctrlResult, err := testCase.reconciler.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Namespace: "work" + rand.String(5),
+					Name:      "work" + rand.String(5),
+				},
+			})
+			assert.Equalf(t, testCase.ctrlResult, ctrlResult, "wrong ctrlResult for testcase %s", testName)
+			assert.Equal(t, testCase.wantErr, err)
 		})
 	}
 }
