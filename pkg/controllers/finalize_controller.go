@@ -18,7 +18,6 @@ package controllers
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -64,7 +63,7 @@ func (r *FinalizeWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	if !r.Joined {
 		klog.InfoS("finalize controller is not started yet")
-		return ctrl.Result{RequeueAfter: time.Second * 5}, fmt.Errorf("finalize controller is not started yet")
+		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 	}
 
 	work := &workv1alpha1.Work{}

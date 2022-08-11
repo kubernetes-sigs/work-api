@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -69,7 +68,7 @@ func TestFinalizerReconcile(t *testing.T) {
 				},
 			},
 			expectedResult: ctrl.Result{RequeueAfter: time.Second * 5},
-			expectedError:  fmt.Errorf("finalize controller is not started yet"),
+			expectedError:  nil,
 		},
 	}
 	for testName, tt := range tests {

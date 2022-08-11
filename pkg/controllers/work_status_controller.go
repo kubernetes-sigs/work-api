@@ -18,7 +18,6 @@ package controllers
 
 import (
 	"context"
-	"fmt"
 	"github.com/pkg/errors"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -69,7 +68,7 @@ func (r *WorkStatusReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	if !r.Joined {
 		klog.InfoS("work status controller is not started yet")
-		return ctrl.Result{RequeueAfter: time.Second * 5}, fmt.Errorf("work status controller is not started yet")
+		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 	}
 
 	work, appliedWork, err := r.fetchWorks(ctx, req.NamespacedName)

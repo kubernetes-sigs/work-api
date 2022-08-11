@@ -88,7 +88,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	if !r.Joined {
 		klog.InfoS("work controller is not started yet")
-		return ctrl.Result{RequeueAfter: time.Second * 5}, fmt.Errorf("work controller is not started yet")
+		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 	}
 
 	work := &workv1alpha1.Work{}

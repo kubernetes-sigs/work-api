@@ -489,7 +489,7 @@ func TestReconcile(t *testing.T) {
 				Joined:             false,
 			},
 			req:     req,
-			wantErr: fmt.Errorf("work controller is not started yet"),
+			wantErr: nil,
 			requeue: false,
 		},
 		"work cannot be retrieved, client failed due to client error": {

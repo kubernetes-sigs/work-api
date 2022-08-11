@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -95,7 +94,7 @@ func TestStop(t *testing.T) {
 				Joined: false,
 			},
 			ctrlResult: ctrl.Result{RequeueAfter: time.Second * 5},
-			wantErr:    fmt.Errorf("work status controller is not started yet"),
+			wantErr:    nil,
 		},
 	}
 
