@@ -83,6 +83,7 @@ func (m testMapper) RESTMapping(gk schema.GroupKind, versions ...string) (*meta.
 }
 
 func TestApplyManifest(t *testing.T) {
+	failMsg := "manifest apply failed"
 	// Manifests
 	rawInvalidResource, _ := json.Marshal([]byte(rand.String(10)))
 	rawMissingResource, _ := json.Marshal(
@@ -110,7 +111,7 @@ func TestApplyManifest(t *testing.T) {
 	// DynamicClients
 	clientFailDynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
 	clientFailDynamicClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
-		return true, nil, errors.New(utils.MessageManifestApplyFailed)
+		return true, nil, errors.New(failMsg)
 	})
 
 	testCases := map[string]struct {
@@ -182,7 +183,7 @@ func TestApplyManifest(t *testing.T) {
 			generation:   0,
 			updated:      false,
 			wantGvr:      expectedGvr,
-			wantErr:      errors.New(utils.MessageManifestApplyFailed),
+			wantErr:      errors.New(failMsg),
 		},
 	}
 
@@ -318,7 +319,7 @@ func TestApplyUnstructured(t *testing.T) {
 			},
 			workObj:    correctObj.DeepCopy(),
 			resultBool: false,
-			resultErr:  errors.New(utils.MessageResourceStateInvalid),
+			resultErr:  errors.New("resource is not managed by the work controller"),
 		},
 		"equal spec hash of current vs work object / succeed without updates": {
 			reconciler: ApplyWorkReconciler{
@@ -379,6 +380,7 @@ func TestApplyUnstructured(t *testing.T) {
 }
 
 func TestReconcile(t *testing.T) {
+	failMsg := "manifest apply failed"
 	workNamespace := rand.String(10)
 	workName := rand.String(10)
 	appliedWorkName := rand.String(10)
@@ -470,7 +472,7 @@ func TestReconcile(t *testing.T) {
 
 	clientFailDynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
 	clientFailDynamicClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
-		return true, nil, errors.New(utils.MessageManifestApplyFailed)
+		return true, nil, errors.New(failMsg)
 	})
 
 	testCases := map[string]struct {
@@ -490,7 +492,7 @@ func TestReconcile(t *testing.T) {
 			},
 			req:     req,
 			wantErr: nil,
-			requeue: false,
+			requeue: true,
 		},
 		"work cannot be retrieved, client failed due to client error": {
 			reconciler: ApplyWorkReconciler{
@@ -587,7 +589,7 @@ func TestReconcile(t *testing.T) {
 				Joined:     true,
 			},
 			req:     req,
-			wantErr: errors.New(utils.MessageResourceRetrieveFailed),
+			wantErr: errors.New("manifest apply unwarranted; the spec has not changed"),
 		},
 		"ApplyManifest fails": {
 			reconciler: ApplyWorkReconciler{
@@ -609,14 +611,14 @@ func TestReconcile(t *testing.T) {
 				Joined:     true,
 			},
 			req:     req,
-			wantErr: errors.New(utils.MessageManifestApplyFailed),
+			wantErr: errors.New(failMsg),
 		},
 		"client update fails": {
 			reconciler: ApplyWorkReconciler{
 				client: &test.MockClient{
 					MockGet: getMock,
 					MockStatusUpdate: func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
-						return errors.New(utils.MessageResourceStatusUpdateFailed)
+						return errors.New("failed")
 					},
 				},
 				spokeDynamicClient: clientFailDynamicClient,
@@ -628,7 +630,7 @@ func TestReconcile(t *testing.T) {
 				Joined:     true,
 			},
 			req:     req,
-			wantErr: errors.New(utils.MessageResourceStatusUpdateFailed),
+			wantErr: errors.New("failed"),
 		},
 		"Happy Path": {
 			reconciler: ApplyWorkReconciler{

@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pkg/errors"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -44,11 +43,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
-	"sigs.k8s.io/work-api/pkg/utils"
 )
 
 const (
-	messageWorkFinalizerMissing = "the Work resource has no finalizer yet, it will be added"
+	workFieldManagerName = "work-api-agent"
 )
 
 // ApplyWorkReconciler reconciles a Work object
@@ -84,33 +82,35 @@ type applyResult struct {
 
 // Reconcile implement the control loop logic for Work object.
 func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	klog.InfoS("Work apply controller reconcile loop triggered.", "item", req.NamespacedName)
-
 	if !r.Joined {
-		klog.InfoS("work controller is not started yet")
+		klog.InfoS("work controller is not started yet", "work", req.NamespacedName)
 		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 	}
+	klog.InfoS("Work apply controller reconcile loop triggered.", "work", req.NamespacedName)
 
 	work := &workv1alpha1.Work{}
 	err := r.client.Get(ctx, req.NamespacedName, work)
 	switch {
 	case apierrors.IsNotFound(err):
+		klog.InfoS("the work resource is deleted", "work", req.NamespacedName)
 		return ctrl.Result{}, nil
 	case err != nil:
+		klog.ErrorS(err, "failed to retrieve the work", "work", req.NamespacedName)
 		return ctrl.Result{}, err
 	}
 	kLogObjRef := klog.KObj(work)
 
 	// do nothing if the finalizer is not present
 	// it ensures all maintained resources will be cleaned once work is deleted
+	// TODO: merge the finalizer controller into this
 	if !controllerutil.ContainsFinalizer(work, workFinalizer) {
-		klog.InfoS(messageWorkFinalizerMissing, work.Kind, kLogObjRef)
+		klog.InfoS("the work resource has no finalizer yet, it will be added", work.Kind, kLogObjRef)
 		return ctrl.Result{}, nil
 	}
 
 	// leave the finalizer to clean up
 	if !work.DeletionTimestamp.IsZero() {
-		klog.InfoS(utils.MessageResourceDeleting, work.Kind, kLogObjRef)
+		klog.InfoS("resource is in the process of being deleted", work.Kind, kLogObjRef)
 		return ctrl.Result{}, nil
 	}
 
@@ -118,76 +118,34 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// The AppliedWork.Name shall match its respective Work resource.
 	appliedWork := &workv1alpha1.AppliedWork{}
 	if err := r.spokeClient.Get(ctx, types.NamespacedName{Name: kLogObjRef.Name}, appliedWork); err != nil {
-		klog.ErrorS(err, utils.MessageResourceRetrieveFailed, "AppliedWork", kLogObjRef.Name)
-		meta.SetStatusCondition(&work.Status.Conditions, generateWorkAvailableStatusCondition(metav1.ConditionFalse, work.Generation))
-
-		return ctrl.Result{}, errors.Wrap(err, fmt.Sprintf(utils.MessageResourceRetrieveFailed+", %s=%s", "AppliedWork", work.Name))
+		klog.ErrorS(err, "failed to retrieve the appliedWork", "AppliedWork", kLogObjRef.Name)
+		return ctrl.Result{}, err
 	}
-
+	// Apply the manifests to the member cluster
 	owner := metav1.OwnerReference{
 		APIVersion: workv1alpha1.GroupVersion.String(),
 		Kind:       workv1alpha1.AppliedWorkKind,
 		Name:       appliedWork.GetName(),
 		UID:        appliedWork.GetUID(),
 	}
-
 	results := r.applyManifests(ctx, work.Spec.Workload.Manifests, owner)
-	var errs []error
 
-	// Update manifestCondition based on the results.
-	var manifestConditions []workv1alpha1.ManifestCondition
-	for _, result := range results {
-		if result.err != nil {
-			errs = append(errs, result.err)
-		}
-
-		appliedCondition := buildAppliedStatusCondition(result.err, result.updated, result.generation)
-		manifestCondition := workv1alpha1.ManifestCondition{
-			Identifier: result.identifier,
-			Conditions: []metav1.Condition{appliedCondition},
-		}
-
-		foundmanifestCondition := findManifestConditionByIdentifier(result.identifier, work.Status.ManifestConditions)
-		if foundmanifestCondition != nil {
-			manifestCondition.Conditions = foundmanifestCondition.Conditions
-			meta.SetStatusCondition(&manifestCondition.Conditions, appliedCondition)
-		}
-		manifestConditions = append(manifestConditions, manifestCondition)
-	}
-
-	work.Status.ManifestConditions = manifestConditions
-
-	workCond := generateWorkAppliedStatusCondition(manifestConditions, work.Generation)
-	work.Status.Conditions = []metav1.Condition{workCond}
-
-	//Update available status condition of work
-	meta.SetStatusCondition(&work.Status.Conditions, generateWorkAvailableStatusCondition(workCond.Status, work.Generation))
+	// generate the work condition based on the apply result
+	errs := r.generateWorkCondition(results, work)
 
 	err = r.client.Status().Update(ctx, work, &client.UpdateOptions{})
 	if err != nil {
-		klog.ErrorS(err, utils.MessageResourceStatusUpdateFailed, work.Kind, kLogObjRef)
 		errs = append(errs, err)
-	} else {
-		klog.InfoS(utils.MessageResourceStatusUpdateSucceeded, work.Kind, kLogObjRef)
+		klog.ErrorS(err, "failed to update work status", "work", kLogObjRef)
 	}
 
 	if len(errs) != 0 {
-		klog.InfoS(utils.MessageManifestApplyIncomplete, work.Kind, kLogObjRef)
-		r.recorder.Event(
-			work,
-			v1.EventTypeWarning,
-			utils.EventReasonReconcileIncomplete,
-			utils.MessageManifestApplyIncomplete)
-
+		klog.InfoS("manifest apply incomplete; the message is queued again for reconciliation",
+			"work", kLogObjRef, "err", utilerrors.NewAggregate(errs))
 		return ctrl.Result{}, utilerrors.NewAggregate(errs)
 	}
-
-	r.recorder.Event(
-		work,
-		v1.EventTypeNormal,
-		utils.EventReasonReconcileComplete,
-		utils.MessageManifestApplyComplete)
-
+	klog.InfoS("apply the work successfully ", "work", kLogObjRef)
+	r.recorder.Event(work, v1.EventTypeNormal, "ReconciliationComplete", "apply the work successfully")
 	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
 }
 
@@ -215,12 +173,12 @@ func (r *ApplyWorkReconciler) applyManifests(ctx context.Context, manifests []wo
 			if result.err == nil {
 				result.generation = obj.GetGeneration()
 				if result.updated {
-					klog.V(4).InfoS(utils.MessageManifestApplySucceeded, "gvr", gvr, "obj", kLogObjRef, "new ObservedGeneration", result.generation)
+					klog.V(4).InfoS("manifest apply succeeded", "gvr", gvr, "obj", kLogObjRef, "new ObservedGeneration", result.generation)
 				} else {
-					klog.V(8).InfoS(utils.MessageManifestApplyUnwarranted, "gvr", gvr, "obj", kLogObjRef)
+					klog.V(5).InfoS("manifest apply unwarranted; the spec has not changed", "gvr", gvr, "obj", kLogObjRef)
 				}
 			} else {
-				klog.ErrorS(err, utils.MessageManifestApplyFailed, "gvr", gvr, "obj", kLogObjRef)
+				klog.ErrorS(err, "manifest apply failed", "gvr", gvr, "obj", kLogObjRef)
 			}
 		}
 		results = append(results, result)
@@ -258,13 +216,11 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 		return nil, false, err
 	}
 
-	curObj, err := r.spokeDynamicClient.
-		Resource(gvr).
-		Namespace(manifestObj.GetNamespace()).
+	curObj, err := r.spokeDynamicClient.Resource(gvr).Namespace(manifestObj.GetNamespace()).
 		Get(ctx, manifestObj.GetName(), metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		actual, err := r.spokeDynamicClient.Resource(gvr).Namespace(manifestObj.GetNamespace()).Create(
-			ctx, manifestObj, metav1.CreateOptions{FieldManager: utils.WorkFieldManagerName})
+			ctx, manifestObj, metav1.CreateOptions{FieldManager: workFieldManagerName})
 
 		return actual, true, err
 	}
@@ -273,8 +229,8 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 	}
 
 	if !hasSharedOwnerReference(curObj.GetOwnerReferences(), manifestObj.GetOwnerReferences()[0]) {
-		err = errors.New(utils.MessageResourceStateInvalid)
-		klog.ErrorS(err, utils.MessageResourceNotOwnedByWorkAPI, "gvr", gvr, "obj", kLogObjRef)
+		err = fmt.Errorf("resource is not managed by the work controller")
+		klog.ErrorS(err, "skip applying the manifest", "gvr", gvr, "obj", kLogObjRef)
 
 		return nil, false, err
 	}
@@ -282,7 +238,7 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 	// We only try to update the object if its spec hash value has changed.
 	if manifestObj.GetAnnotations()[specHashAnnotation] != curObj.GetAnnotations()[specHashAnnotation] {
 		klog.V(5).InfoS(
-			utils.MessageResourceSpecModified, "gvr", gvr, "obj", kLogObjRef,
+			"resource spec is modified", "gvr", gvr, "obj", kLogObjRef,
 			"new hash", manifestObj.GetAnnotations()[specHashAnnotation],
 			"existing hash", curObj.GetAnnotations()[specHashAnnotation])
 
@@ -292,24 +248,52 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 
 		newData, err := manifestObj.MarshalJSON()
 		if err != nil {
-			klog.ErrorS(err, utils.MessageResourceJSONMarshalFailed, "gvr", gvr, "obj", kLogObjRef)
+			klog.ErrorS(err, "failed to JSON marshall manifest", "gvr", gvr, "obj", kLogObjRef)
 			return nil, false, err
 		}
 		// Use sever-side apply to be safe.
 		actual, err := r.spokeDynamicClient.Resource(gvr).Namespace(manifestObj.GetNamespace()).
 			Patch(ctx, manifestObj.GetName(), types.ApplyPatchType, newData,
-				metav1.PatchOptions{Force: pointer.Bool(true), FieldManager: utils.WorkFieldManagerName})
+				metav1.PatchOptions{Force: pointer.Bool(true), FieldManager: workFieldManagerName})
 		if err != nil {
-			klog.ErrorS(err, utils.MessageResourcePatchFailed, "gvr", gvr, "obj", kLogObjRef)
-
+			klog.ErrorS(err, "failed to patch the manifest", "gvr", gvr, "obj", kLogObjRef)
 			return nil, false, err
 		}
-		klog.V(5).InfoS(utils.MessageResourcePatchSucceeded, "gvr", gvr, "obj", kLogObjRef)
+		klog.V(4).InfoS("resource patch succeeded", "gvr", gvr, "obj", kLogObjRef)
 
 		return actual, true, err
 	}
 
 	return curObj, false, nil
+}
+
+// generateWorkCondition constructs the work condition based on the apply result
+func (r *ApplyWorkReconciler) generateWorkCondition(results []applyResult, work *workv1alpha1.Work) []error {
+	var errs []error
+	// Update manifestCondition based on the results.
+	var manifestConditions []workv1alpha1.ManifestCondition
+	for _, result := range results {
+		if result.err != nil {
+			errs = append(errs, result.err)
+		}
+
+		appliedCondition := buildAppliedStatusCondition(result.err, result.updated, result.generation)
+		manifestCondition := workv1alpha1.ManifestCondition{
+			Identifier: result.identifier,
+			Conditions: []metav1.Condition{appliedCondition},
+		}
+		foundmanifestCondition := findManifestConditionByIdentifier(result.identifier, work.Status.ManifestConditions)
+		if foundmanifestCondition != nil {
+			manifestCondition.Conditions = foundmanifestCondition.Conditions
+			meta.SetStatusCondition(&manifestCondition.Conditions, appliedCondition)
+		}
+		manifestConditions = append(manifestConditions, manifestCondition)
+	}
+
+	work.Status.ManifestConditions = manifestConditions
+	workCond := generateWorkAppliedStatusCondition(manifestConditions, work.Generation)
+	work.Status.Conditions = []metav1.Condition{workCond}
+	return errs
 }
 
 // SetupWithManager wires up the controller.

@@ -18,7 +18,7 @@ package controllers
 
 import (
 	"context"
-	"github.com/pkg/errors"
+	"fmt"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -37,7 +37,6 @@ import (
 	"time"
 
 	workapi "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
-	"sigs.k8s.io/work-api/pkg/utils"
 )
 
 // WorkStatusReconciler reconciles a Work object when its status changes
@@ -83,22 +82,21 @@ func (r *WorkStatusReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	// from now on both work objects should exist
 	newRes, staleRes := r.calculateNewAppliedWork(work, appliedWork)
-	if err = r.deleteStaleWork(ctx, staleRes); err != nil {
-		klog.ErrorS(err, utils.MessageResourceGarbageCollectionIncomplete, work.Kind, kLogObjRef)
-		r.recorder.Event(work, v1.EventTypeWarning, utils.EventReasonResourceGarbageCollectionIncomplete, utils.MessageResourceGarbageCollectionIncomplete)
-
+	if err = r.deleteStaleManifest(ctx, staleRes); err != nil {
+		klog.ErrorS(err, "resource garbage-collection incomplete; some Work owned resources could not be deleted", work.Kind, kLogObjRef)
 		// we can't proceed to update the applied
 		return ctrl.Result{}, err
 	} else if len(staleRes) > 0 && err == nil {
 		// TODO: Specify which manifest was deleted.
-		klog.InfoS(utils.MessageResourceGarbageCollectionComplete, work.Kind, kLogObjRef)
-		r.recorder.Event(work, v1.EventTypeNormal, utils.EventReasonResourceGarbageCollectionComplete, utils.MessageResourceGarbageCollectionComplete)
+		msg := "successfully garbage-collected all stale manifests"
+		klog.InfoS(msg, work.Kind, kLogObjRef)
+		r.recorder.Event(work, v1.EventTypeNormal, "ResourceGarbageCollectionComplete", msg)
 	}
 
 	// update the appliedWork with the new work
 	appliedWork.Status.AppliedResources = newRes
 	if err = r.spokeClient.Status().Update(ctx, appliedWork, &client.UpdateOptions{}); err != nil {
-		klog.ErrorS(err, utils.MessageResourceStatusUpdateFailed, appliedWork.Kind, appliedWork.GetName())
+		klog.ErrorS(err, "failed to update appliedWork status", appliedWork.Kind, appliedWork.GetName())
 		return ctrl.Result{}, err
 	}
 
@@ -121,11 +119,8 @@ func (r *WorkStatusReconciler) calculateNewAppliedWork(work *workapi.Work, appli
 			}
 		}
 		if !resStillExist {
-			klog.V(3).InfoS(utils.MessageResourceIsOrphan,
-				"parent GVK", work.GetObjectKind().GroupVersionKind(),
-				"parent resource", work.GetName(),
-				"orphan resource", resourceMeta)
-
+			klog.V(3).InfoS("find an orphaned resource in the member cluster",
+				"parent resource", work.GetName(), "orphaned resource", resourceMeta.ResourceIdentifier)
 			staleRes = append(staleRes, resourceMeta)
 		}
 	}
@@ -133,10 +128,7 @@ func (r *WorkStatusReconciler) calculateNewAppliedWork(work *workapi.Work, appli
 	for _, manifestCond := range work.Status.ManifestConditions {
 		ac := meta.FindStatusCondition(manifestCond.Conditions, ConditionTypeApplied)
 		if ac == nil {
-			err := errors.New(utils.MessageResourceStateInvalid)
-			klog.ErrorS(err, utils.MessageResourceIsMissingCondition,
-				"resource", manifestCond.Identifier,
-				"missing condition", ConditionTypeApplied)
+			klog.ErrorS(fmt.Errorf("resource is missing  applied condition"), "applied condition missing", "resource", manifestCond.Identifier)
 			continue
 		}
 		// we only add the applied one to the appliedWork status
@@ -151,11 +143,8 @@ func (r *WorkStatusReconciler) calculateNewAppliedWork(work *workapi.Work, appli
 				}
 			}
 			if !resRecorded {
-				klog.V(5).InfoS(utils.MessageResourceDiscovered,
-					"parent GVK", work.GetObjectKind().GroupVersionKind(),
-					"parent Work", work.GetName(),
-					"discovered resource", manifestCond.Identifier)
-
+				klog.V(5).InfoS("discovered a new resource",
+					"parent Work", work.GetName(), "discovered resource", manifestCond.Identifier)
 				newRes = append(newRes, workapi.AppliedResourceMeta{
 					ResourceIdentifier: manifestCond.Identifier,
 				})
@@ -166,19 +155,19 @@ func (r *WorkStatusReconciler) calculateNewAppliedWork(work *workapi.Work, appli
 	return newRes, staleRes
 }
 
-func (r *WorkStatusReconciler) deleteStaleWork(ctx context.Context, staleWorks []workapi.AppliedResourceMeta) error {
+func (r *WorkStatusReconciler) deleteStaleManifest(ctx context.Context, staleManifests []workapi.AppliedResourceMeta) error {
 	var errs []error
 
-	for _, staleWork := range staleWorks {
+	for _, staleManifest := range staleManifests {
 		gvr := schema.GroupVersionResource{
-			Group:    staleWork.Group,
-			Version:  staleWork.Version,
-			Resource: staleWork.Resource,
+			Group:    staleManifest.Group,
+			Version:  staleManifest.Version,
+			Resource: staleManifest.Resource,
 		}
-		err := r.spokeDynamicClient.Resource(gvr).Namespace(staleWork.Namespace).
-			Delete(ctx, staleWork.Name, metav1.DeleteOptions{})
-		if err != nil && !apierrors.IsGone(err) {
-			klog.ErrorS(err, utils.MessageResourceDeleteFailed, "resource", staleWork)
+		err := r.spokeDynamicClient.Resource(gvr).Namespace(staleManifest.Namespace).
+			Delete(ctx, staleManifest.Name, metav1.DeleteOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			klog.ErrorS(err, "failed to delete the staled manifest", "manifest", staleManifest)
 			errs = append(errs, err)
 		}
 	}
