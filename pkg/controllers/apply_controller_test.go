@@ -1,122 +1,870 @@
-/*
-Copyright 2021 The Kubernetes Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package controllers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"k8s.io/apimachinery/pkg/types"
+	"math"
+	"reflect"
+	"testing"
 	"time"
 
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
-
-	corev1 "k8s.io/api/core/v1"
+	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/pkg/errors"
+	"github.com/stretchr/testify/assert"
+	appsv1 "k8s.io/api/apps/v1"
+	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	utilrand "k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/dynamic/fake"
+	testingclient "k8s.io/client-go/testing"
+	"k8s.io/utils/pointer"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
+	"sigs.k8s.io/work-api/pkg/utils"
 )
 
-var _ = Describe("Work Controller", func() {
-	var workNamespace string
-	const timeout = time.Second * 30
-	const interval = time.Second * 1
+var (
+	fakeDynamicClient = fake.NewSimpleDynamicClient(runtime.NewScheme())
+	appliedWork       = &workv1alpha1.AppliedWork{}
+	ownerRef          = metav1.OwnerReference{
+		APIVersion: workv1alpha1.GroupVersion.String(),
+		Kind:       appliedWork.Kind,
+	}
+	testGvr = schema.GroupVersionResource{
+		Group:    "apps",
+		Version:  "v1",
+		Resource: "Deployment",
+	}
+	testDeployment = appsv1.Deployment{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Deployment",
+			APIVersion: "apps/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "Deployment",
+			OwnerReferences: []metav1.OwnerReference{
+				ownerRef,
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			MinReadySeconds: 5,
+		},
+	}
+	rawTestDeployment, _ = json.Marshal(testDeployment)
+	testManifest         = workv1alpha1.Manifest{RawExtension: runtime.RawExtension{
+		Raw: rawTestDeployment,
+	}}
+)
 
-	BeforeEach(func() {
-		workNamespace = "work-" + utilrand.String(5)
-		// Create namespace
-		ns := &corev1.Namespace{
+// This interface is needed for testMapper abstract class.
+type testMapper struct {
+	meta.RESTMapper
+}
+
+func (m testMapper) RESTMapping(gk schema.GroupKind, versions ...string) (*meta.RESTMapping, error) {
+	if gk.Kind == "Deployment" {
+		return &meta.RESTMapping{
+			Resource:         testGvr,
+			GroupVersionKind: testDeployment.GroupVersionKind(),
+			Scope:            nil,
+		}, nil
+	} else {
+		return nil, errors.New("test error: mapping does not exist.")
+	}
+}
+
+func TestApplyManifest(t *testing.T) {
+	failMsg := "manifest apply failed"
+	// Manifests
+	rawInvalidResource, _ := json.Marshal([]byte(utilrand.String(10)))
+	rawMissingResource, _ := json.Marshal(
+		v1.Pod{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "Pod",
+				APIVersion: "core/v1",
+			},
+		})
+	InvalidManifest := workv1alpha1.Manifest{RawExtension: runtime.RawExtension{
+		Raw: rawInvalidResource,
+	}}
+	MissingManifest := workv1alpha1.Manifest{RawExtension: runtime.RawExtension{
+		Raw: rawMissingResource,
+	}}
+
+	// GVRs
+	expectedGvr := schema.GroupVersionResource{
+		Group:    "apps",
+		Version:  "v1",
+		Resource: "Deployment",
+	}
+	emptyGvr := schema.GroupVersionResource{}
+
+	// DynamicClients
+	clientFailDynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
+	clientFailDynamicClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+		return true, nil, errors.New(failMsg)
+	})
+
+	testCases := map[string]struct {
+		reconciler   ApplyWorkReconciler
+		manifestList []workv1alpha1.Manifest
+		generation   int64
+		updated      bool
+		wantGvr      schema.GroupVersionResource
+		wantErr      error
+	}{
+		"manifest is in proper format/ happy path": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: fakeDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+				joined:             true,
+			},
+			manifestList: append([]workv1alpha1.Manifest{}, testManifest),
+			generation:   0,
+			updated:      true,
+			wantGvr:      expectedGvr,
+			wantErr:      nil,
+		},
+		"manifest has incorrect syntax/ decode fail": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: fakeDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+				joined:             true,
+			},
+			manifestList: append([]workv1alpha1.Manifest{}, InvalidManifest),
+			generation:   0,
+			updated:      false,
+			wantGvr:      emptyGvr,
+			wantErr: &json.UnmarshalTypeError{
+				Value: "string",
+				Type:  reflect.TypeOf(map[string]interface{}{}),
+			},
+		},
+		"manifest is correct / object not mapped in restmapper / decode fail": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: fakeDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+				joined:             true,
+			},
+			manifestList: append([]workv1alpha1.Manifest{}, MissingManifest),
+			generation:   0,
+			updated:      false,
+			wantGvr:      emptyGvr,
+			wantErr:      errors.New("failed to find group/version/resource from restmapping: test error: mapping does not exist."),
+		},
+		"manifest is in proper format/ should fail applyUnstructured": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: clientFailDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+				joined:             true,
+			},
+			manifestList: append([]workv1alpha1.Manifest{}, testManifest),
+			generation:   0,
+			updated:      false,
+			wantGvr:      expectedGvr,
+			wantErr:      errors.New(failMsg),
+		},
+	}
+
+	for testName, testCase := range testCases {
+		t.Run(testName, func(t *testing.T) {
+			resultList := testCase.reconciler.applyManifests(context.Background(), testCase.manifestList, ownerRef)
+			for _, result := range resultList {
+				if testCase.wantErr != nil {
+					assert.Containsf(t, result.err.Error(), testCase.wantErr.Error(), "Incorrect error for Testcase %s", testName)
+				}
+				assert.Equalf(t, testCase.generation, result.generation, "Testcase %s: generation incorrect", testName)
+				assert.Equalf(t, testCase.updated, result.updated, "Testcase %s: Updated boolean incorrect", testName)
+			}
+		})
+	}
+}
+
+func TestApplyUnstructured(t *testing.T) {
+	correctObj, correctDynamicClient, correctSpecHash := createObjAndDynamicClient(testManifest.Raw)
+
+	testDeploymentDiffSpec := testDeployment.DeepCopy()
+	testDeploymentDiffSpec.Spec.MinReadySeconds = 0
+	rawDiffSpec, _ := json.Marshal(testDeploymentDiffSpec)
+	testManifestDiffSpec := workv1alpha1.Manifest{RawExtension: runtime.RawExtension{
+		Raw: rawDiffSpec,
+	}}
+	diffSpecObj, diffSpecDynamicClient, diffSpecHash := createObjAndDynamicClient(testManifestDiffSpec.Raw)
+
+	patchFailClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
+	patchFailClient.PrependReactor("patch", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+		return true, nil, errors.New("patch failed")
+	})
+	patchFailClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+		return true, diffSpecObj.DeepCopy(), nil
+	})
+
+	dynamicClientNotFound := fake.NewSimpleDynamicClient(runtime.NewScheme())
+	dynamicClientNotFound.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+		return false,
+			nil,
+			&apierrors.StatusError{
+				ErrStatus: metav1.Status{
+					Status: metav1.StatusFailure,
+					Reason: metav1.StatusReasonNotFound,
+				}}
+	})
+
+	dynamicClientError := fake.NewSimpleDynamicClient(runtime.NewScheme())
+	dynamicClientError.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+		return true,
+			nil,
+			errors.New("client error")
+	})
+
+	testDeploymentWithDifferentOwner := appsv1.Deployment{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Deployment",
+			APIVersion: "apps/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "Deployment",
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: utilrand.String(10),
+					Kind:       utilrand.String(10),
+					Name:       utilrand.String(10),
+					UID:        types.UID(utilrand.String(10)),
+				},
+			},
+		},
+	}
+	rawTestDeploymentWithDifferentOwner, _ := json.Marshal(testDeploymentWithDifferentOwner)
+	_, diffOwnerDynamicClient, _ := createObjAndDynamicClient(rawTestDeploymentWithDifferentOwner)
+
+	specHashFailObj := correctObj.DeepCopy()
+	specHashFailObj.Object["test"] = math.Inf(1)
+
+	testCases := map[string]struct {
+		reconciler     ApplyWorkReconciler
+		workObj        *unstructured.Unstructured
+		resultSpecHash string
+		resultBool     bool
+		resultErr      error
+	}{
+		"error during SpecHash Generation / fail": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: fakeDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+				joined:             true,
+			},
+			workObj:    specHashFailObj,
+			resultBool: false,
+			resultErr:  errors.New("unsupported value"),
+		},
+		"not found error looking for object / success due to creation": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: dynamicClientNotFound,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+				joined:             true,
+			},
+			workObj:        correctObj.DeepCopy(),
+			resultSpecHash: correctSpecHash,
+			resultBool:     true,
+			resultErr:      nil,
+		},
+		"client error looking for object / fail": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: dynamicClientError,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+				joined:             true,
+			},
+			workObj:    correctObj.DeepCopy(),
+			resultBool: false,
+			resultErr:  errors.New("client error"),
+		},
+		"owner reference comparison failure / fail": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: diffOwnerDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+				joined:             true,
+			},
+			workObj:    correctObj.DeepCopy(),
+			resultBool: false,
+			resultErr:  errors.New("resource is not managed by the work controller"),
+		},
+		"equal spec hash of current vs work object / succeed without updates": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: correctDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+				joined:             true,
+			},
+			workObj:        correctObj.DeepCopy(),
+			resultSpecHash: correctSpecHash,
+			resultBool:     false,
+			resultErr:      nil,
+		},
+		"unequal spec hash of current vs work object / client patch fail": {
+			reconciler: ApplyWorkReconciler{
+				spokeDynamicClient: patchFailClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+				joined:             true,
+			},
+			workObj:    correctObj.DeepCopy(),
+			resultBool: false,
+			resultErr:  errors.New("patch failed"),
+		},
+		"happy path - with updates": {
+			reconciler: ApplyWorkReconciler{
+				spokeDynamicClient: diffSpecDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+				joined:             true,
+			},
+			workObj:        &correctObj,
+			resultSpecHash: diffSpecHash,
+			resultBool:     true,
+			resultErr:      nil,
+		},
+	}
+
+	for testName, testCase := range testCases {
+		t.Run(testName, func(t *testing.T) {
+			applyResult, applyResultBool, err := testCase.reconciler.applyUnstructured(context.Background(), testGvr, testCase.workObj)
+			assert.Equalf(t, testCase.resultBool, applyResultBool, "updated boolean not matching for Testcase %s", testName)
+			if testCase.resultErr != nil {
+				assert.Containsf(t, err.Error(), testCase.resultErr.Error(), "error not matching for Testcase %s", testName)
+			} else {
+				assert.Truef(t, err == nil, "err is not nil for Testcase %s", testName)
+				assert.Truef(t, applyResult != nil, "applyResult is not nil for Testcase %s", testName)
+				assert.Equalf(t, testCase.resultSpecHash, applyResult.GetAnnotations()[manifestHashAnnotation],
+					"specHash not matching for Testcase %s", testName)
+				assert.Equalf(t, ownerRef, applyResult.GetOwnerReferences()[0], "ownerRef not matching for Testcase %s", testName)
+			}
+		})
+	}
+}
+
+func TestReconcile(t *testing.T) {
+	failMsg := "manifest apply failed"
+	workNamespace := utilrand.String(10)
+	workName := utilrand.String(10)
+	appliedWorkName := utilrand.String(10)
+	req := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Namespace: workNamespace,
+			Name:      workName,
+		},
+	}
+	wrongReq := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Namespace: utilrand.String(10),
+			Name:      utilrand.String(10),
+		},
+	}
+	invalidReq := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Namespace: "",
+			Name:      "",
+		},
+	}
+
+	getMock := func(ctx context.Context, key client.ObjectKey, obj client.Object) error {
+		if key.Namespace != workNamespace {
+			return &apierrors.StatusError{
+				ErrStatus: metav1.Status{
+					Status: metav1.StatusFailure,
+					Reason: metav1.StatusReasonNotFound,
+				}}
+		}
+		o, _ := obj.(*workv1alpha1.Work)
+		*o = workv1alpha1.Work{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: workNamespace,
+				Namespace:  workNamespace,
+				Name:       workName,
+				Finalizers: []string{"multicluster.x-k8s.io/work-cleanup"},
+			},
+			Spec: workv1alpha1.WorkSpec{Workload: workv1alpha1.WorkloadTemplate{Manifests: []workv1alpha1.Manifest{testManifest}}},
+		}
+		return nil
+	}
+
+	happyDeployment := appsv1.Deployment{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Deployment",
+			APIVersion: "apps/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "Deployment",
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: workv1alpha1.GroupVersion.String(),
+					Kind:       "AppliedWork",
+					Name:       appliedWorkName,
+				},
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			MinReadySeconds: 5,
+		},
+	}
+	rawHappyDeployment, _ := json.Marshal(happyDeployment)
+	happyManifest := workv1alpha1.Manifest{RawExtension: runtime.RawExtension{
+		Raw: rawHappyDeployment,
+	}}
+	_, happyDynamicClient, _ := createObjAndDynamicClient(happyManifest.Raw)
+
+	getMockAppliedWork := func(ctx context.Context, key client.ObjectKey, obj client.Object) error {
+
+		if key.Name != workName {
+			return &apierrors.StatusError{
+				ErrStatus: metav1.Status{
+					Status: metav1.StatusFailure,
+					Reason: metav1.StatusReasonNotFound,
+				}}
+		}
+		o, _ := obj.(*workv1alpha1.AppliedWork)
+		*o = workv1alpha1.AppliedWork{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: appliedWorkName,
+			},
+			Spec: workv1alpha1.AppliedWorkSpec{
+				WorkName:      workNamespace,
+				WorkNamespace: workName,
 			},
 		}
-		_, err := k8sClient.CoreV1().Namespaces().Create(context.Background(), ns, metav1.CreateOptions{})
-		Expect(err).ToNot(HaveOccurred())
+		return nil
+	}
+
+	clientFailDynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
+	clientFailDynamicClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+		return true, nil, errors.New(failMsg)
 	})
 
-	AfterEach(func() {
-		// Add any teardown steps that needs to be executed after each test
-		err := k8sClient.CoreV1().Namespaces().Delete(context.Background(), workNamespace, metav1.DeleteOptions{})
-		Expect(err).ToNot(HaveOccurred())
-	})
-	Context("Deploy manifests by work", func() {
-		It("Should have a configmap deployed correctly", func() {
-			cmName := "testcm"
-			cmNamespace := "default"
-			cm := &corev1.ConfigMap{
-				TypeMeta: metav1.TypeMeta{
-					APIVersion: "v1",
-					Kind:       "ConfigMap",
-				},
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      cmName,
-					Namespace: cmNamespace,
-				},
-				Data: map[string]string{
-					"test": "test",
-				},
-			}
-
-			work := &workv1alpha1.Work{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-work",
-					Namespace: workNamespace,
-				},
-				Spec: workv1alpha1.WorkSpec{
-					Workload: workv1alpha1.WorkloadTemplate{
-						Manifests: []workv1alpha1.Manifest{
-							{
-								RawExtension: runtime.RawExtension{Object: cm},
-							},
-						},
+	testCases := map[string]struct {
+		reconciler ApplyWorkReconciler
+		req        ctrl.Request
+		wantErr    error
+		requeue    bool
+	}{
+		"controller is being stopped": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: happyDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+				joined:             false,
+			},
+			req:     req,
+			wantErr: nil,
+			requeue: true,
+		},
+		"work cannot be retrieved, client failed due to client error": {
+			reconciler: ApplyWorkReconciler{
+				client: &test.MockClient{
+					MockGet: func(ctx context.Context, key client.ObjectKey, obj client.Object) error {
+						return fmt.Errorf("client failing")
 					},
 				},
+				spokeDynamicClient: fakeDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+				joined:             true,
+			},
+			req:     invalidReq,
+			wantErr: errors.New("client failing"),
+		},
+		"work cannot be retrieved, client failed due to not found error": {
+			reconciler: ApplyWorkReconciler{
+				client: &test.MockClient{
+					MockGet: getMock,
+				},
+				spokeDynamicClient: fakeDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+			},
+			req:     wrongReq,
+			wantErr: nil,
+		},
+		"work without finalizer / no error": {
+			reconciler: ApplyWorkReconciler{
+				client: &test.MockClient{
+					MockGet: func(ctx context.Context, key client.ObjectKey, obj client.Object) error {
+						o, _ := obj.(*workv1alpha1.Work)
+						*o = workv1alpha1.Work{
+							ObjectMeta: metav1.ObjectMeta{
+								Namespace: workNamespace,
+								Name:      workName,
+							},
+						}
+						return nil
+					},
+				},
+				spokeDynamicClient: fakeDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+			},
+			req:     req,
+			wantErr: nil,
+		},
+		"work with non-zero deletion-timestamp / succeed": {
+			reconciler: ApplyWorkReconciler{
+				client: &test.MockClient{
+					MockGet: func(ctx context.Context, key client.ObjectKey, obj client.Object) error {
+						o, _ := obj.(*workv1alpha1.Work)
+						*o = workv1alpha1.Work{
+							ObjectMeta: metav1.ObjectMeta{
+								Namespace:         workNamespace,
+								Name:              workName,
+								Finalizers:        []string{"multicluster.x-k8s.io/work-cleanup"},
+								DeletionTimestamp: &metav1.Time{Time: time.Now()},
+							},
+						}
+						return nil
+					},
+				},
+				spokeDynamicClient: fakeDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+			},
+			req:     req,
+			wantErr: nil,
+		},
+		"Retrieving appliedwork fails": {
+			reconciler: ApplyWorkReconciler{
+				client: &test.MockClient{
+					MockGet: getMock,
+				},
+				spokeDynamicClient: fakeDynamicClient,
+				spokeClient: &test.MockClient{
+					MockGet: func(ctx context.Context, key client.ObjectKey, obj client.Object) error {
+						return &apierrors.StatusError{
+							ErrStatus: metav1.Status{
+								Status: metav1.StatusFailure,
+								Reason: metav1.StatusReasonNotFound,
+							}}
+					},
+				},
+				restMapper: testMapper{},
+				recorder:   utils.NewFakeRecorder(1),
+				joined:     true,
+			},
+			req:     req,
+			wantErr: errors.New("manifest apply unwarranted; the spec has not changed"),
+		},
+		"ApplyManifest fails": {
+			reconciler: ApplyWorkReconciler{
+				client: &test.MockClient{
+					MockGet: getMock,
+					MockStatusUpdate: func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+						return nil
+					},
+				},
+				spokeDynamicClient: clientFailDynamicClient,
+				spokeClient: &test.MockClient{
+					MockGet: getMockAppliedWork,
+					MockStatusUpdate: func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+						return nil
+					},
+				},
+				restMapper: testMapper{},
+				recorder:   utils.NewFakeRecorder(2),
+				joined:     true,
+			},
+			req:     req,
+			wantErr: errors.New(failMsg),
+		},
+		"client update fails": {
+			reconciler: ApplyWorkReconciler{
+				client: &test.MockClient{
+					MockGet: getMock,
+					MockStatusUpdate: func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+						return errors.New("failed")
+					},
+				},
+				spokeDynamicClient: clientFailDynamicClient,
+				spokeClient: &test.MockClient{
+					MockGet: getMockAppliedWork,
+				},
+				restMapper: testMapper{},
+				recorder:   utils.NewFakeRecorder(2),
+				joined:     true,
+			},
+			req:     req,
+			wantErr: errors.New("failed"),
+		},
+		"Happy Path": {
+			reconciler: ApplyWorkReconciler{
+				client: &test.MockClient{
+					MockGet: getMock,
+					MockStatusUpdate: func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+						return nil
+					},
+				},
+				spokeDynamicClient: happyDynamicClient,
+				spokeClient: &test.MockClient{
+					MockGet: getMockAppliedWork,
+				},
+				restMapper: testMapper{},
+				recorder:   utils.NewFakeRecorder(1),
+				joined:     true,
+			},
+			req:     req,
+			wantErr: nil,
+			requeue: true,
+		},
+	}
+	for testName, testCase := range testCases {
+		t.Run(testName, func(t *testing.T) {
+			ctrlResult, err := testCase.reconciler.Reconcile(context.Background(), testCase.req)
+			if testCase.wantErr != nil {
+				assert.Containsf(t, err.Error(), testCase.wantErr.Error(), "incorrect error for Testcase %s", testName)
+			} else {
+				if testCase.requeue {
+					assert.Equal(t, ctrl.Result{RequeueAfter: time.Minute * 5}, ctrlResult, "incorrect ctrlResult for Testcase %s", testName)
+				}
+				assert.Equalf(t, false, ctrlResult.Requeue, "incorrect ctrlResult for Testcase %s", testName)
 			}
-
-			err := workClient.Create(context.Background(), work)
-			Expect(err).ToNot(HaveOccurred())
-
-			Eventually(func() error {
-				_, err := k8sClient.CoreV1().ConfigMaps(cmNamespace).Get(context.Background(), cmName, metav1.GetOptions{})
-				return err
-			}, timeout, interval).Should(Succeed())
-
-			Eventually(func() error {
-				resultWork := workv1alpha1.Work{}
-				err := workClient.Get(context.Background(), types.NamespacedName{Name: work.GetName(), Namespace: workNamespace}, &resultWork)
-				if err != nil {
-					return err
-				}
-				if len(resultWork.Status.ManifestConditions) != 1 {
-					return fmt.Errorf("Expect the 1 manifest condition is updated")
-				}
-
-				if !meta.IsStatusConditionTrue(resultWork.Status.ManifestConditions[0].Conditions, "Applied") {
-					return fmt.Errorf("Exepect condition status of the manifest to be true")
-				}
-
-				if !meta.IsStatusConditionTrue(resultWork.Status.Conditions, "Applied") {
-					return fmt.Errorf("Exepect condition status of the work to be true")
-				}
-
-				return nil
-			}, timeout, interval).Should(Succeed())
 		})
+	}
+}
+
+func TestSetManifestHashAnnotation(t *testing.T) {
+	// basic setup
+	appliedOwnerRef := metav1.OwnerReference{
+		APIVersion: workv1alpha1.GroupVersion.String(),
+		Kind:       workv1alpha1.AppliedWorkKind,
+		Name:       utilrand.String(10),
+		UID:        types.UID(utilrand.String(10)),
+	}
+	manifestObj := appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "Deployment",
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: utilrand.String(10),
+					Kind:       utilrand.String(10),
+					Name:       utilrand.String(10),
+					UID:        types.UID(utilrand.String(10)),
+				},
+			},
+			Annotations: map[string]string{utilrand.String(10): utilrand.String(10)},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Paused: true,
+			Strategy: appsv1.DeploymentStrategy{
+				Type: appsv1.RecreateDeploymentStrategyType,
+			},
+		},
+	}
+	// the normal case that the curObj has an annotation and owner reference with status
+	curObj := manifestObj.DeepCopy()
+	curObj.Annotations[manifestHashAnnotation] = utilrand.String(10)
+	curObj.OwnerReferences = append(curObj.OwnerReferences, appliedOwnerRef)
+	curObj.Status.Replicas = 10
+	curObj.Status.ReadyReplicas = 1
+
+	tests := map[string]struct {
+		manifestObj interface{}
+		curObj      interface{}
+		isSame      bool
+	}{
+		"the normal case after an object is applied": {
+			manifestObj: &manifestObj,
+			curObj:      curObj,
+			isSame:      true,
+		},
+		"current is owned by multiple appliedWorks": {
+			manifestObj: &manifestObj,
+			curObj: func() *appsv1.Deployment {
+				extraObj := curObj.DeepCopy()
+				extraObj.OwnerReferences = append(extraObj.OwnerReferences, appliedOwnerRef)
+				return extraObj
+			}(),
+			isSame: true,
+		},
+		"current status changed": {
+			manifestObj: &manifestObj,
+			curObj: func() *appsv1.Deployment {
+				extraObj := curObj.DeepCopy()
+				extraObj.Status.ReadyReplicas = 10
+				return extraObj
+			}(),
+			isSame: true,
+		},
+		"current's appliedWork owner is removed by the user": {
+			manifestObj: &manifestObj,
+			curObj: func() *appsv1.Deployment {
+				noObj := curObj.DeepCopy()
+				noObj.SetOwnerReferences(manifestObj.GetOwnerReferences())
+				return noObj
+			}(),
+			isSame: true,
+		},
+		"current's hash annotation is changed by the user": {
+			manifestObj: &manifestObj,
+			curObj: func() *appsv1.Deployment {
+				alterObj := curObj.DeepCopy()
+				alterObj.Annotations[manifestHashAnnotation] = utilrand.String(10)
+				return alterObj
+			}(),
+			isSame: true,
+		},
+		"manifest is has changed ownership": {
+			manifestObj: func() *appsv1.Deployment {
+				alterObj := manifestObj.DeepCopy()
+				alterObj.OwnerReferences[0].APIVersion = utilrand.String(10)
+				return alterObj
+			}(),
+			curObj: curObj,
+			isSame: false,
+		},
+		"manifest has a different label": {
+			manifestObj: func() *appsv1.Deployment {
+				alterObj := manifestObj.DeepCopy()
+				alterObj.SetLabels(map[string]string{utilrand.String(5): utilrand.String(10)})
+				return alterObj
+			}(),
+			curObj: curObj,
+			isSame: false,
+		},
+		"manifest has a different annotation": {
+			manifestObj: func() *appsv1.Deployment {
+				alterObj := manifestObj.DeepCopy()
+				alterObj.SetAnnotations(map[string]string{utilrand.String(5): utilrand.String(10)})
+				return alterObj
+			}(),
+			curObj: curObj,
+			isSame: false,
+		},
+		"manifest has a different spec": {
+			manifestObj: func() *appsv1.Deployment {
+				alterObj := manifestObj.DeepCopy()
+				alterObj.Spec.Replicas = pointer.Int32Ptr(100)
+				return alterObj
+			}(),
+			curObj: curObj,
+			isSame: false,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			var uCurObj, uManifestObj unstructured.Unstructured
+			uManifestObj.Object, _ = runtime.DefaultUnstructuredConverter.ToUnstructured(tt.manifestObj)
+			uCurObj.Object, _ = runtime.DefaultUnstructuredConverter.ToUnstructured(tt.curObj)
+			setManifestHashAnnotation(&uManifestObj)
+			setManifestHashAnnotation(&uCurObj)
+			manifestHash := uManifestObj.GetAnnotations()[manifestHashAnnotation]
+			curHash := uCurObj.GetAnnotations()[manifestHashAnnotation]
+			assert.Equalf(t, tt.isSame, manifestHash == curHash, "manifestObj = (%v), curObj = (%+v) ", tt.manifestObj, tt.curObj)
+		})
+	}
+}
+
+func TestIsManifestManagedByWork(t *testing.T) {
+	tests := map[string]struct {
+		ownerRefs []metav1.OwnerReference
+		isManaged bool
+	}{
+		"empty owner list": {
+			ownerRefs: nil,
+			isManaged: false,
+		},
+		"no appliedWork": {
+			ownerRefs: []metav1.OwnerReference{
+				{
+					APIVersion: workv1alpha1.GroupVersion.String(),
+					Kind:       workv1alpha1.WorkKind,
+				},
+			},
+			isManaged: false,
+		},
+		"one appliedWork": {
+			ownerRefs: []metav1.OwnerReference{
+				{
+					APIVersion: workv1alpha1.GroupVersion.String(),
+					Kind:       workv1alpha1.AppliedWorkKind,
+					Name:       utilrand.String(10),
+					UID:        types.UID(utilrand.String(10)),
+				},
+			},
+			isManaged: true,
+		},
+		"multiple appliedWork": {
+			ownerRefs: []metav1.OwnerReference{
+				{
+					APIVersion: workv1alpha1.GroupVersion.String(),
+					Kind:       workv1alpha1.AppliedWorkKind,
+					Name:       utilrand.String(10),
+					UID:        types.UID(utilrand.String(10)),
+				},
+				{
+					APIVersion: workv1alpha1.GroupVersion.String(),
+					Kind:       workv1alpha1.AppliedWorkKind,
+					UID:        types.UID(utilrand.String(10)),
+				},
+			},
+			isManaged: true,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert.Equalf(t, tt.isManaged, isManifestManagedByWork(tt.ownerRefs), "isManifestManagedByWork(%v)", tt.ownerRefs)
+		})
+	}
+}
+
+func createObjAndDynamicClient(rawManifest []byte) (unstructured.Unstructured, dynamic.Interface, string) {
+	unstructuredObj := &unstructured.Unstructured{}
+	_ = unstructuredObj.UnmarshalJSON(rawManifest)
+	validSpecHash, _ := computeManifestHash(unstructuredObj)
+	unstructuredObj.SetAnnotations(map[string]string{manifestHashAnnotation: validSpecHash})
+	dynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
+	dynamicClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+		return true, unstructuredObj, nil
 	})
-})
+	dynamicClient.PrependReactor("patch", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+		return true, unstructuredObj, nil
+	})
+	return *unstructuredObj, dynamicClient, validSpecHash
+}

@@ -1,7 +1,7 @@
 apiVersion: multicluster.x-k8s.io/v1alpha1
 kind: Work
 metadata:
-  name: test-work
+  name: test-work-2
   namespace: default
 spec:
   workload:

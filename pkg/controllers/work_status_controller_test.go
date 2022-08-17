@@ -30,16 +30,17 @@ func TestCalculateNewAppliedWork(t *testing.T) {
 		inputAppliedWork v1alpha1.AppliedWork
 		expectedNewRes   []v1alpha1.AppliedResourceMeta
 		expectedStaleRes []v1alpha1.AppliedResourceMeta
+		hasErr           bool
 	}{
 		"AppliedWork and Work has been garbage collected; AppliedWork and Work of a resource both does not exist": {
-			r:                WorkStatusReconciler{Joined: true},
+			r:                WorkStatusReconciler{joined: true},
 			inputWork:        inputWork,
 			inputAppliedWork: inputAppliedWork,
 			expectedNewRes:   []v1alpha1.AppliedResourceMeta(nil),
 			expectedStaleRes: []v1alpha1.AppliedResourceMeta(nil),
 		},
 		"AppliedWork and Work of a resource exists; there are nothing being deleted": {
-			r:                WorkStatusReconciler{Joined: true},
+			r:                WorkStatusReconciler{joined: true},
 			inputWork:        inputWorkWithResourceIdentifier,
 			inputAppliedWork: inputAppliedWorkWithResourceIdentifier,
 			expectedNewRes: []v1alpha1.AppliedResourceMeta{
@@ -51,7 +52,7 @@ func TestCalculateNewAppliedWork(t *testing.T) {
 			expectedStaleRes: []v1alpha1.AppliedResourceMeta(nil),
 		},
 		"Work resource has been deleted, but the corresponding AppliedWork remains": {
-			r:                WorkStatusReconciler{Joined: true},
+			r:                WorkStatusReconciler{joined: true},
 			inputWork:        inputWork,
 			inputAppliedWork: inputAppliedWorkWithResourceIdentifier,
 			expectedNewRes:   []v1alpha1.AppliedResourceMeta(nil),
@@ -63,7 +64,7 @@ func TestCalculateNewAppliedWork(t *testing.T) {
 			},
 		},
 		"Work resource contains the status of a resource that does not exist within the AppliedWork resource.": {
-			r:                WorkStatusReconciler{Joined: true},
+			r:                WorkStatusReconciler{joined: true},
 			inputWork:        inputWorkWithResourceIdentifier,
 			inputAppliedWork: inputAppliedWork,
 			expectedNewRes: []v1alpha1.AppliedResourceMeta{
@@ -76,9 +77,12 @@ func TestCalculateNewAppliedWork(t *testing.T) {
 	}
 	for testName, tt := range tests {
 		t.Run(testName, func(t *testing.T) {
-			newRes, staleRes := tt.r.calculateNewAppliedWork(&tt.inputWork, &tt.inputAppliedWork)
+			newRes, staleRes, err := tt.r.generateDiff(context.Background(), &tt.inputWork, &tt.inputAppliedWork)
 			assert.Equalf(t, tt.expectedNewRes, newRes, "Testcase %s: NewRes is different from what it should be.", testName)
 			assert.Equalf(t, tt.expectedStaleRes, staleRes, "Testcase %s: StaleRes is different from what it should be.", testName)
+			if tt.hasErr {
+				assert.Truef(t, err != nil, "Testcase %s: Should get an err.", testName)
+			}
 		})
 	}
 }
@@ -91,7 +95,7 @@ func TestStop(t *testing.T) {
 	}{
 		"controller is being stopped": {
 			reconciler: WorkStatusReconciler{
-				Joined: false,
+				joined: false,
 			},
 			ctrlResult: ctrl.Result{RequeueAfter: time.Second * 5},
 			wantErr:    nil,

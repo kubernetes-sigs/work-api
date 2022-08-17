@@ -31,8 +31,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-
 	"sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 	"sigs.k8s.io/work-api/pkg/controllers"
 	"sigs.k8s.io/work-api/version"
@@ -72,8 +70,10 @@ func main() {
 	flag.IntVar(&concurrentReconciles, "concurrency", 5, "max work reconciler concurrency")
 
 	flag.Parse()
-
 	defer klog.Flush()
+	flag.VisitAll(func(f *flag.Flag) {
+		klog.InfoS("flag:", "name", f.Name, "value", f.Value)
+	})
 
 	opts := ctrl.Options{
 		Scheme:                 scheme,
@@ -85,7 +85,7 @@ func main() {
 		HealthProbeBindAddress: healthAddr,
 		Namespace:              workNamespace,
 	}
-	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+
 	var hubConfig *restclient.Config
 	var err error
 

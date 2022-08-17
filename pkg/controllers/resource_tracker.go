@@ -30,6 +30,7 @@ import (
 	workapi "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
+// TODO: merge this back to the work status controller
 type appliedResourceTracker struct {
 	hubClient          client.Client
 	spokeClient        client.Client
@@ -49,30 +50,30 @@ func (r *appliedResourceTracker) fetchWorks(ctx context.Context, nsWorkName type
 	work := &workapi.Work{}
 	appliedWork := &workapi.AppliedWork{}
 
-	// fetch work CR from the member cluster
+	// fetch work CR from the hub cluster
 	err := r.hubClient.Get(ctx, nsWorkName, work)
 	switch {
 	case errors.IsNotFound(err):
-		klog.InfoS("work does not exist", "item", nsWorkName)
+		klog.V(4).InfoS("work resource does not exist", "item", nsWorkName)
 		work = nil
 	case err != nil:
-		klog.ErrorS(err, "failed to get work", "item", nsWorkName)
+		klog.ErrorS(err, "failed to get the work obj", "item", nsWorkName)
 		return nil, nil, err
 	default:
-		klog.V(8).InfoS("work exists in the hub cluster", "item", nsWorkName)
+		klog.V(5).InfoS("work exists in the hub cluster", "item", nsWorkName)
 	}
 
 	// fetch appliedWork CR from the member cluster
 	err = r.spokeClient.Get(ctx, nsWorkName, appliedWork)
 	switch {
 	case errors.IsNotFound(err):
-		klog.InfoS("appliedWork does not exist", "item", nsWorkName)
+		klog.V(4).InfoS("appliedWork obj does not exist", "item", nsWorkName)
 		appliedWork = nil
 	case err != nil:
 		klog.ErrorS(err, "failed to get appliedWork", "item", nsWorkName)
 		return nil, nil, err
 	default:
-		klog.V(8).InfoS("appliedWork exists in the member cluster", "item", nsWorkName)
+		klog.V(5).InfoS("appliedWork exists in the member cluster", "item", nsWorkName)
 	}
 
 	if err := checkConsistentExist(work, appliedWork, nsWorkName); err != nil {

@@ -32,8 +32,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/envtest/printer"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
@@ -60,8 +58,6 @@ func TestAPIs(t *testing.T) {
 }
 
 var _ = BeforeSuite(func(done Done) {
-	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
-
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths: []string{filepath.Join("../../", "config", "crd")},
