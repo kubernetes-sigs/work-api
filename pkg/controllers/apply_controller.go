@@ -370,7 +370,8 @@ func (r *ApplyWorkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // we have modified.
 func computeManifestHash(obj *unstructured.Unstructured) (string, error) {
 	manifest := obj.DeepCopy()
-	// strip all the appliedWork owner fields
+	// strip all the appliedWork owner fields just in case
+	// those fields should not exist in the manifest
 	curRefs := manifest.GetOwnerReferences()
 	var newRefs []metav1.OwnerReference
 	for _, ownerRef := range curRefs {
@@ -388,8 +389,15 @@ func computeManifestHash(obj *unstructured.Unstructured) (string, error) {
 		manifest.SetAnnotations(annotation)
 	}
 	// strip the status just in case
+	manifest.SetResourceVersion("")
+	manifest.SetGeneration(0)
+	manifest.SetUID("")
+	manifest.SetSelfLink("")
+	manifest.SetDeletionTimestamp(nil)
+	manifest.SetManagedFields(nil)
+	unstructured.RemoveNestedField(manifest.Object, "metadata", "creationTimestamp")
+	unstructured.RemoveNestedField(manifest.Object, "status")
 	data := manifest.Object
-	delete(data, "status")
 	// compute the sha256 hash of the remaining data
 	jsonBytes, err := json.Marshal(data)
 	if err != nil {
@@ -437,7 +445,7 @@ func findManifestConditionByIdentifier(identifier workv1alpha1.ResourceIdentifie
 // setManifestHashAnnotation computes the hash of the provided manifest and sets an annotation of the
 // hash on the provided unstructured object.
 func setManifestHashAnnotation(manifestObj *unstructured.Unstructured) error {
-	specHash, err := computeManifestHash(manifestObj)
+	manifestHash, err := computeManifestHash(manifestObj)
 	if err != nil {
 		return err
 	}
@@ -446,7 +454,7 @@ func setManifestHashAnnotation(manifestObj *unstructured.Unstructured) error {
 	if annotation == nil {
 		annotation = map[string]string{}
 	}
-	annotation[manifestHashAnnotation] = specHash
+	annotation[manifestHashAnnotation] = manifestHash
 	manifestObj.SetAnnotations(annotation)
 	return nil
 }

@@ -671,12 +671,6 @@ func TestReconcile(t *testing.T) {
 
 func TestSetManifestHashAnnotation(t *testing.T) {
 	// basic setup
-	appliedOwnerRef := metav1.OwnerReference{
-		APIVersion: workv1alpha1.GroupVersion.String(),
-		Kind:       workv1alpha1.AppliedWorkKind,
-		Name:       utilrand.String(10),
-		UID:        types.UID(utilrand.String(10)),
-	}
 	manifestObj := appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "Deployment",
@@ -697,56 +691,41 @@ func TestSetManifestHashAnnotation(t *testing.T) {
 			},
 		},
 	}
-	// the normal case that the curObj has an annotation and owner reference with status
-	curObj := manifestObj.DeepCopy()
-	curObj.Annotations[manifestHashAnnotation] = utilrand.String(10)
-	curObj.OwnerReferences = append(curObj.OwnerReferences, appliedOwnerRef)
-	curObj.Status.Replicas = 10
-	curObj.Status.ReadyReplicas = 1
+	// pre-compute the hash
+	preObj := manifestObj.DeepCopy()
+	var uPreObj unstructured.Unstructured
+	uPreObj.Object, _ = runtime.DefaultUnstructuredConverter.ToUnstructured(preObj)
+	preHash, _ := computeManifestHash(&uPreObj)
 
 	tests := map[string]struct {
 		manifestObj interface{}
-		curObj      interface{}
 		isSame      bool
 	}{
-		"the normal case after an object is applied": {
-			manifestObj: &manifestObj,
-			curObj:      curObj,
-			isSame:      true,
-		},
-		"current is owned by multiple appliedWorks": {
-			manifestObj: &manifestObj,
-			curObj: func() *appsv1.Deployment {
-				extraObj := curObj.DeepCopy()
-				extraObj.OwnerReferences = append(extraObj.OwnerReferences, appliedOwnerRef)
-				return extraObj
-			}(),
-			isSame: true,
-		},
-		"current status changed": {
-			manifestObj: &manifestObj,
-			curObj: func() *appsv1.Deployment {
-				extraObj := curObj.DeepCopy()
+		"manifest status changed": {
+			manifestObj: func() *appsv1.Deployment {
+				extraObj := manifestObj.DeepCopy()
 				extraObj.Status.ReadyReplicas = 10
 				return extraObj
 			}(),
 			isSame: true,
 		},
-		"current's appliedWork owner is removed by the user": {
-			manifestObj: &manifestObj,
-			curObj: func() *appsv1.Deployment {
-				noObj := curObj.DeepCopy()
-				noObj.SetOwnerReferences(manifestObj.GetOwnerReferences())
-				return noObj
+		"manifest's has hashAnnotation": {
+			manifestObj: func() *appsv1.Deployment {
+				alterObj := manifestObj.DeepCopy()
+				alterObj.Annotations[manifestHashAnnotation] = utilrand.String(10)
+				return alterObj
 			}(),
 			isSame: true,
 		},
-		"current's hash annotation is changed by the user": {
-			manifestObj: &manifestObj,
-			curObj: func() *appsv1.Deployment {
-				alterObj := curObj.DeepCopy()
-				alterObj.Annotations[manifestHashAnnotation] = utilrand.String(10)
-				return alterObj
+		"manifest has extra metadata": {
+			manifestObj: func() *appsv1.Deployment {
+				noObj := manifestObj.DeepCopy()
+				noObj.SetSelfLink(utilrand.String(2))
+				noObj.SetResourceVersion(utilrand.String(4))
+				noObj.SetGeneration(3)
+				noObj.SetUID(types.UID(utilrand.String(3)))
+				noObj.SetCreationTimestamp(metav1.Now())
+				return noObj
 			}(),
 			isSame: true,
 		},
@@ -756,7 +735,6 @@ func TestSetManifestHashAnnotation(t *testing.T) {
 				alterObj.OwnerReferences[0].APIVersion = utilrand.String(10)
 				return alterObj
 			}(),
-			curObj: curObj,
 			isSame: false,
 		},
 		"manifest has a different label": {
@@ -765,7 +743,6 @@ func TestSetManifestHashAnnotation(t *testing.T) {
 				alterObj.SetLabels(map[string]string{utilrand.String(5): utilrand.String(10)})
 				return alterObj
 			}(),
-			curObj: curObj,
 			isSame: false,
 		},
 		"manifest has a different annotation": {
@@ -774,7 +751,6 @@ func TestSetManifestHashAnnotation(t *testing.T) {
 				alterObj.SetAnnotations(map[string]string{utilrand.String(5): utilrand.String(10)})
 				return alterObj
 			}(),
-			curObj: curObj,
 			isSame: false,
 		},
 		"manifest has a different spec": {
@@ -783,20 +759,21 @@ func TestSetManifestHashAnnotation(t *testing.T) {
 				alterObj.Spec.Replicas = pointer.Int32Ptr(100)
 				return alterObj
 			}(),
-			curObj: curObj,
 			isSame: false,
 		},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			var uCurObj, uManifestObj unstructured.Unstructured
+			var uManifestObj unstructured.Unstructured
 			uManifestObj.Object, _ = runtime.DefaultUnstructuredConverter.ToUnstructured(tt.manifestObj)
-			uCurObj.Object, _ = runtime.DefaultUnstructuredConverter.ToUnstructured(tt.curObj)
-			setManifestHashAnnotation(&uManifestObj)
-			setManifestHashAnnotation(&uCurObj)
+			err := setManifestHashAnnotation(&uManifestObj)
+			if err != nil {
+				t.Error("failed to marshall the manifest", err.Error())
+			}
 			manifestHash := uManifestObj.GetAnnotations()[manifestHashAnnotation]
-			curHash := uCurObj.GetAnnotations()[manifestHashAnnotation]
-			assert.Equalf(t, tt.isSame, manifestHash == curHash, "manifestObj = (%v), curObj = (%+v) ", tt.manifestObj, tt.curObj)
+			if tt.isSame != (manifestHash == preHash) {
+				t.Errorf("testcase %s failed: manifestObj = (%+v)", name, tt.manifestObj)
+			}
 		})
 	}
 }
