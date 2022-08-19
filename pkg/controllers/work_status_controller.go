@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/record"
@@ -37,25 +38,28 @@ import (
 	"time"
 )
 
+// TODO: merge this with the apply controller
+
 // WorkStatusReconciler reconciles a Work object when its status changes
 type WorkStatusReconciler struct {
-	appliedResourceTracker
-	recorder    record.EventRecorder
-	concurrency int
-	joined      bool
+	hubClient          client.Client
+	spokeClient        client.Client
+	spokeDynamicClient dynamic.Interface
+	restMapper         meta.RESTMapper
+	recorder           record.EventRecorder
+	concurrency        int
+	joined             bool
 }
 
 func NewWorkStatusReconciler(hubClient client.Client, spokeDynamicClient dynamic.Interface, spokeClient client.Client, restMapper meta.RESTMapper, recorder record.EventRecorder, concurrency int, joined bool) *WorkStatusReconciler {
 	return &WorkStatusReconciler{
-		appliedResourceTracker: appliedResourceTracker{
-			hubClient:          hubClient,
-			spokeClient:        spokeClient,
-			spokeDynamicClient: spokeDynamicClient,
-			restMapper:         restMapper,
-		},
-		recorder:    recorder,
-		concurrency: concurrency,
-		joined:      joined,
+		hubClient:          hubClient,
+		spokeClient:        spokeClient,
+		spokeDynamicClient: spokeDynamicClient,
+		restMapper:         restMapper,
+		recorder:           recorder,
+		concurrency:        concurrency,
+		joined:             joined,
 	}
 }
 
@@ -103,6 +107,51 @@ func (r *WorkStatusReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// Reconcile the difference between the work status/appliedWork status/what is on the member cluster
+// work.status represents what should be on the member cluster (it cannot be empty, we will reject empty work)
+// appliedWork.status represents what was on the member cluster (it's okay for it to be empty)
+// Objects in the appliedWork.status but not in the work.status should be removed from the member cluster.
+// We then go through all the work.status manifests whose condition is successfully applied
+// For each of them, we check if the object exists in the member cluster, if not, we recreate it according to the original manifest
+// We insert it into the new appliedWork.Status
+func (r *WorkStatusReconciler) fetchWorks(ctx context.Context, nsWorkName types.NamespacedName) (*workapi.Work, *workapi.AppliedWork, error) {
+	work := &workapi.Work{}
+	appliedWork := &workapi.AppliedWork{}
+
+	// fetch work CR from the hub cluster
+	err := r.hubClient.Get(ctx, nsWorkName, work)
+	switch {
+	case apierrors.IsNotFound(err):
+		klog.V(4).InfoS("work resource does not exist", "item", nsWorkName)
+		work = nil
+	case err != nil:
+		klog.ErrorS(err, "failed to get the work obj", "item", nsWorkName)
+		return nil, nil, err
+	default:
+		klog.V(5).InfoS("work exists in the hub cluster", "item", nsWorkName)
+	}
+
+	// fetch appliedWork CR from the member cluster
+	err = r.spokeClient.Get(ctx, nsWorkName, appliedWork)
+	switch {
+	case apierrors.IsNotFound(err):
+		klog.V(4).InfoS("appliedWork obj does not exist", "item", nsWorkName)
+		appliedWork = nil
+	case err != nil:
+		klog.ErrorS(err, "failed to get appliedWork", "item", nsWorkName)
+		return nil, nil, err
+	default:
+		klog.V(5).InfoS("appliedWork exists in the member cluster", "item", nsWorkName)
+	}
+
+	if err := checkConsistentExist(work, appliedWork, nsWorkName); err != nil {
+		klog.ErrorS(err, "applied/work object existence not consistent", "item", nsWorkName)
+		return nil, nil, err
+	}
+
+	return work, appliedWork, nil
 }
 
 // generateDiff check the difference between what is supposed to be applied  (tracked by the work CR status)
@@ -206,6 +255,21 @@ func (r *WorkStatusReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}).
 		For(&workapi.Work{}, builder.WithPredicates(UpdateOnlyPredicate{}, predicate.ResourceVersionChangedPredicate{})).
 		Complete(r)
+}
+
+func checkConsistentExist(work *workapi.Work, appliedWork *workapi.AppliedWork, workName types.NamespacedName) error {
+	// work already deleted
+	if work == nil && appliedWork != nil {
+		return fmt.Errorf("work finalizer didn't delete the appliedWork %s", workName)
+	}
+	// we are triggered by appliedWork change or work update so the appliedWork should already be here
+	if work != nil && appliedWork == nil {
+		return fmt.Errorf("work controller didn't create the appliedWork %s", workName)
+	}
+	if work == nil && appliedWork == nil {
+		klog.InfoS("both applied and work are garbage collected", "item", workName)
+	}
+	return nil
 }
 
 // UpdateOnlyPredicate is used since we only need to process the update event

@@ -96,7 +96,6 @@ var WorkCreatedContext = func(description string, manifestFiles []string) bool {
 
 		BeforeEach(func() {
 			mDetails = generateManifestDetails(manifestFiles)
-
 			workObj := createWorkObj(
 				getWorkName(5),
 				defaultWorkNamespace,
@@ -118,10 +117,8 @@ var WorkCreatedContext = func(description string, manifestFiles []string) bool {
 			Eventually(func() error {
 				appliedWork := workapi.AppliedWork{}
 				err := spokeClient.Get(context.Background(), types.NamespacedName{
-					Namespace: createdWork.Namespace,
-					Name:      createdWork.Name,
+					Name: createdWork.Name,
 				}, &appliedWork)
-
 				return err
 			}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
 
@@ -129,7 +126,6 @@ var WorkCreatedContext = func(description string, manifestFiles []string) bool {
 			Eventually(func() error {
 				_, err := spokeKubeClient.AppsV1().Deployments(mDetails[0].ObjMeta.Namespace).
 					Get(context.Background(), mDetails[0].ObjMeta.Name, metav1.GetOptions{})
-
 				return err
 			}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
 
@@ -137,7 +133,6 @@ var WorkCreatedContext = func(description string, manifestFiles []string) bool {
 			Eventually(func() error {
 				_, err := spokeKubeClient.CoreV1().Services(mDetails[1].ObjMeta.Namespace).
 					Get(context.Background(), mDetails[1].ObjMeta.Name, metav1.GetOptions{})
-
 				return err
 			}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
 
@@ -163,13 +158,11 @@ var WorkCreatedWithCRDContext = func(description string, manifestFiles []string)
 
 		BeforeEach(func() {
 			manifestDetails = generateManifestDetails(manifestFiles)
-
 			workObj := createWorkObj(
 				getWorkName(5),
 				defaultWorkNamespace,
 				manifestDetails,
 			)
-
 			err = createWork(workObj)
 			createdWork, err = retrieveWork(workObj.Namespace, workObj.Name)
 			Expect(err).ToNot(HaveOccurred())
@@ -184,7 +177,6 @@ var WorkCreatedWithCRDContext = func(description string, manifestFiles []string)
 			Eventually(func() error {
 				By("verifying the CRD exists within the spoke")
 				_, err = spokeApiExtensionClient.ApiextensionsV1().CustomResourceDefinitions().Get(context.Background(), manifestDetails[0].ObjMeta.Name, metav1.GetOptions{})
-
 				return err
 			}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
 		})

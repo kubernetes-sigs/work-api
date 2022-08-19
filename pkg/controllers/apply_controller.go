@@ -108,7 +108,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.garbageCollectAppliedWork(ctx, work)
 	}
 
-	// Get the appliedWork
+	// ensure that the appliedWork and the finalizer exist
 	appliedWork, err := r.ensureAppliedWork(ctx, work)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -134,12 +134,12 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	if len(errs) != 0 {
-		klog.InfoS("manifest apply incomplete; the message is queued again for reconciliation",
-			"work", kLogObjRef, "err", utilerrors.NewAggregate(errs))
+		klog.ErrorS(utilerrors.NewAggregate(errs), "manifest apply incomplete; the message is queued again for reconciliation",
+			"work", kLogObjRef)
 		return ctrl.Result{}, utilerrors.NewAggregate(errs)
 	}
 	klog.InfoS("apply the work successfully ", "work", kLogObjRef)
-	r.recorder.Event(work, v1.EventTypeNormal, "ReconciliationComplete", "apply the work successfully")
+	r.recorder.Event(work, v1.EventTypeNormal, "ApplyWorkSucceed", "apply the work successfully")
 	// we periodically reconcile the work to make sure the member cluster state is in sync with the work
 	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
 }
@@ -224,7 +224,7 @@ func (r *ApplyWorkReconciler) applyManifests(ctx context.Context, manifests []wo
 		if err != nil {
 			result.err = err
 		} else {
-			utils.UpsertOwnerRef(owner, rawObj)
+			utils.AddOwnerRef(owner, rawObj)
 			appliedObj, result.updated, result.err = r.applyUnstructured(ctx, gvr, rawObj)
 			result.identifier = buildResourceIdentifier(index, rawObj, gvr)
 			kLogObjRef := klog.ObjectRef{
@@ -388,7 +388,7 @@ func computeManifestHash(obj *unstructured.Unstructured) (string, error) {
 		delete(annotation, manifestHashAnnotation)
 		manifest.SetAnnotations(annotation)
 	}
-	// strip the status just in case
+	// strip the live object related fields just in case
 	manifest.SetResourceVersion("")
 	manifest.SetGeneration(0)
 	manifest.SetUID("")
@@ -397,9 +397,8 @@ func computeManifestHash(obj *unstructured.Unstructured) (string, error) {
 	manifest.SetManagedFields(nil)
 	unstructured.RemoveNestedField(manifest.Object, "metadata", "creationTimestamp")
 	unstructured.RemoveNestedField(manifest.Object, "status")
-	data := manifest.Object
 	// compute the sha256 hash of the remaining data
-	jsonBytes, err := json.Marshal(data)
+	jsonBytes, err := json.Marshal(manifest)
 	if err != nil {
 		return "", err
 	}

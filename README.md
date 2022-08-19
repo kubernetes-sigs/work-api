@@ -69,7 +69,7 @@ kubectl apply -k deploy
 ```shell
 kubectl delete secret hub-kubeconfig-secret -n fleet-system
 kubectl create secret generic hub-kubeconfig-secret --from-file=kubeconfig=/Users/ryanzhang/.kube/hub -n fleet-system
-go run cmd/workcontroller/workcontroller.go --work-namespace=default --hub-kubeconfig-secret=hub-kubeconfig-secret
+go run cmd/workcontroller/workcontroller.go --work-namespace=default --hub-kubeconfig-secret=hub-kubeconfig-secret -v 5 -add_dir_header
 ```
 
 
