@@ -218,7 +218,7 @@ func TestApplyManifest(t *testing.T) {
 }
 
 func TestApplyUnstructured(t *testing.T) {
-	correctObj, correctDynamicClient, correctSpecHash := createObjAndDynamicClient(testManifest.Raw)
+	correctObj, _, correctSpecHash := createObjAndDynamicClient(testManifest.Raw)
 
 	testDeploymentDiffSpec := testDeployment.DeepCopy()
 	testDeploymentDiffSpec.Spec.MinReadySeconds = 0
@@ -286,19 +286,6 @@ func TestApplyUnstructured(t *testing.T) {
 		resultBool     bool
 		resultErr      error
 	}{
-		"error during SpecHash Generation / fail": {
-			reconciler: ApplyWorkReconciler{
-				client:             &test.MockClient{},
-				spokeDynamicClient: fakeDynamicClient,
-				spokeClient:        &test.MockClient{},
-				restMapper:         testMapper{},
-				recorder:           utils.NewFakeRecorder(1),
-				joined:             true,
-			},
-			workObj:    specHashFailObj,
-			resultBool: false,
-			resultErr:  errors.New("unsupported value"),
-		},
 		"not found error looking for object / success due to creation": {
 			reconciler: ApplyWorkReconciler{
 				client:             &test.MockClient{},
@@ -338,20 +325,6 @@ func TestApplyUnstructured(t *testing.T) {
 			workObj:    correctObj.DeepCopy(),
 			resultBool: false,
 			resultErr:  errors.New("resource is not managed by the work controller"),
-		},
-		"equal spec hash of current vs work object / succeed without updates": {
-			reconciler: ApplyWorkReconciler{
-				client:             &test.MockClient{},
-				spokeDynamicClient: correctDynamicClient,
-				spokeClient:        &test.MockClient{},
-				restMapper:         testMapper{},
-				recorder:           utils.NewFakeRecorder(1),
-				joined:             true,
-			},
-			workObj:        correctObj.DeepCopy(),
-			resultSpecHash: correctSpecHash,
-			resultBool:     false,
-			resultErr:      nil,
 		},
 		"unequal spec hash of current vs work object / client patch fail": {
 			reconciler: ApplyWorkReconciler{
@@ -699,6 +672,10 @@ func TestReconcile(t *testing.T) {
 func TestSetManifestHashAnnotation(t *testing.T) {
 	// basic setup
 	manifestObj := appsv1.Deployment{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "Deployment",
 			OwnerReferences: []metav1.OwnerReference{
@@ -717,6 +694,9 @@ func TestSetManifestHashAnnotation(t *testing.T) {
 				Type: appsv1.RecreateDeploymentStrategyType,
 			},
 		},
+		Status: appsv1.DeploymentStatus{
+			ReadyReplicas: 1,
+		},
 	}
 	// pre-compute the hash
 	preObj := manifestObj.DeepCopy()
@@ -728,6 +708,13 @@ func TestSetManifestHashAnnotation(t *testing.T) {
 		manifestObj interface{}
 		isSame      bool
 	}{
+		"manifest same, same": {
+			manifestObj: func() *appsv1.Deployment {
+				extraObj := manifestObj.DeepCopy()
+				return extraObj
+			}(),
+			isSame: true,
+		},
 		"manifest status changed, same": {
 			manifestObj: func() *appsv1.Deployment {
 				extraObj := manifestObj.DeepCopy()

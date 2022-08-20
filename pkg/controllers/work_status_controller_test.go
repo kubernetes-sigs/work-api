@@ -79,17 +79,6 @@ func TestCalculateNewAppliedWork(t *testing.T) {
 				},
 			},
 		},
-		"Work resource contains the status of a resource that does not exist within the AppliedWork resource.": {
-			r:                WorkStatusReconciler{joined: true},
-			inputWork:        inputWorkWithResourceIdentifier,
-			inputAppliedWork: inputAppliedWork,
-			expectedNewRes: []v1alpha1.AppliedResourceMeta{
-				{
-					ResourceIdentifier: inputWorkWithResourceIdentifier.Status.ManifestConditions[0].Identifier,
-				},
-			},
-			expectedStaleRes: []v1alpha1.AppliedResourceMeta(nil),
-		},
 	}
 	for testName, tt := range tests {
 		t.Run(testName, func(t *testing.T) {

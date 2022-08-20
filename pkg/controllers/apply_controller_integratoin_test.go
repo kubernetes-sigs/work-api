@@ -116,7 +116,6 @@ var _ = Describe("Work Controller", func() {
 				if !meta.IsStatusConditionTrue(resultWork.Status.Conditions, "Applied") {
 					return fmt.Errorf("Exepect condition status of the work to be true")
 				}
-
 				return nil
 			}, timeout, interval).Should(Succeed())
 		})
