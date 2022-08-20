@@ -21,7 +21,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"sigs.k8s.io/work-api/pkg/utils"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -44,6 +43,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
+	"sigs.k8s.io/work-api/pkg/utils"
 )
 
 const (
@@ -129,8 +129,8 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// update the work status
 	if err = r.client.Status().Update(ctx, work, &client.UpdateOptions{}); err != nil {
-		errs = append(errs, err)
 		klog.ErrorS(err, "failed to update work status", "work", kLogObjRef)
+		return ctrl.Result{}, err
 	}
 
 	if len(errs) != 0 {
@@ -273,7 +273,7 @@ func (r *ApplyWorkReconciler) applyUnstructured(ctx context.Context, gvr schema.
 	if apierrors.IsNotFound(err) {
 		actual, createErr := r.spokeDynamicClient.Resource(gvr).Namespace(manifestObj.GetNamespace()).Create(
 			ctx, manifestObj, metav1.CreateOptions{FieldManager: workFieldManagerName})
-		if createErr == nil || apierrors.IsAlreadyExists(createErr) {
+		if createErr == nil {
 			klog.V(4).InfoS("successfully created the manfiest", "gvr", gvr, "manfiest", manifestRef)
 			return actual, true, nil
 		}
@@ -311,6 +311,9 @@ func (r *ApplyWorkReconciler) patchCurrentResource(ctx context.Context, gvr sche
 	klog.V(5).InfoS("manifest is modified", "gvr", gvr, "manifest", manifestRef,
 		"new hash", manifestObj.GetAnnotations()[manifestHashAnnotation],
 		"existing hash", curObj.GetAnnotations()[manifestHashAnnotation])
+	// merge owner refes since the patch does just replace
+	manifestObj.SetOwnerReferences(utils.MergeOwnerReference(curObj.GetOwnerReferences(), manifestObj.GetOwnerReferences()))
+
 	newData, err := manifestObj.MarshalJSON()
 	if err != nil {
 		klog.ErrorS(err, "failed to JSON marshall manifest", "gvr", gvr, "manifest", manifestRef)
@@ -370,18 +373,6 @@ func (r *ApplyWorkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // we have modified.
 func computeManifestHash(obj *unstructured.Unstructured) (string, error) {
 	manifest := obj.DeepCopy()
-	// strip all the appliedWork owner fields just in case
-	// those fields should not exist in the manifest
-	curRefs := manifest.GetOwnerReferences()
-	var newRefs []metav1.OwnerReference
-	for _, ownerRef := range curRefs {
-		if ownerRef.APIVersion == workv1alpha1.GroupVersion.String() && ownerRef.Kind == workv1alpha1.AppliedWorkKind {
-			// we skip the appliedWork owner
-			continue
-		}
-		newRefs = append(newRefs, ownerRef)
-	}
-	manifest.SetOwnerReferences(newRefs)
 	// remove the manifestHash Annotation just in case
 	annotation := manifest.GetAnnotations()
 	if annotation != nil {
@@ -398,7 +389,7 @@ func computeManifestHash(obj *unstructured.Unstructured) (string, error) {
 	unstructured.RemoveNestedField(manifest.Object, "metadata", "creationTimestamp")
 	unstructured.RemoveNestedField(manifest.Object, "status")
 	// compute the sha256 hash of the remaining data
-	jsonBytes, err := json.Marshal(manifest)
+	jsonBytes, err := json.Marshal(manifest.Object)
 	if err != nil {
 		return "", err
 	}

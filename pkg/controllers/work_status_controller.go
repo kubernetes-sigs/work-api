@@ -19,6 +19,8 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"time"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,8 +36,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+
 	workapi "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
-	"time"
 )
 
 // TODO: merge this with the apply controller

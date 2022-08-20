@@ -25,7 +25,6 @@ VERSION_KEY    := sigs.k8s.io/work-api/version.VelaVersion
 GITVERSION_KEY := sigs.k8s.io/work-api/version.GitRevision
 LDFLAGS             ?= "-s -w -X $(VERSION_KEY)=$(VERSION) -X $(GITVERSION_KEY)=$(GIT_COMMIT)"
 
-
 GOHOSTOS ?=$(shell go env GOHOSTOS)
 GOHOSTARCH ?=$(shell go env GOHOSTARCH)
 K8S_VERSION ?=1.19.2

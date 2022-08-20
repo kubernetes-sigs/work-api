@@ -54,7 +54,7 @@ var (
 	appliedWork       = &workv1alpha1.AppliedWork{}
 	ownerRef          = metav1.OwnerReference{
 		APIVersion: workv1alpha1.GroupVersion.String(),
-		Kind:       appliedWork.Kind,
+		Kind:       "AppliedWork",
 	}
 	testGvr = schema.GroupVersionResource{
 		Group:    "apps",
@@ -588,10 +588,13 @@ func TestReconcile(t *testing.T) {
 			req:     req,
 			wantErr: nil,
 		},
-		"Retrieving appliedwork fails": {
+		"Retrieving appliedwork fails, will create": {
 			reconciler: ApplyWorkReconciler{
 				client: &test.MockClient{
 					MockGet: getMock,
+					MockStatusUpdate: func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+						return nil
+					},
 				},
 				spokeDynamicClient: fakeDynamicClient,
 				spokeClient: &test.MockClient{
@@ -602,13 +605,16 @@ func TestReconcile(t *testing.T) {
 								Reason: metav1.StatusReasonNotFound,
 							}}
 					},
+					MockCreate: func(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+						return nil
+					},
 				},
 				restMapper: testMapper{},
 				recorder:   utils.NewFakeRecorder(1),
 				joined:     true,
 			},
 			req:     req,
-			wantErr: errors.New("manifest apply unwarranted; the spec has not changed"),
+			wantErr: nil,
 		},
 		"ApplyManifest fails": {
 			reconciler: ApplyWorkReconciler{
@@ -679,7 +685,11 @@ func TestReconcile(t *testing.T) {
 				assert.Containsf(t, err.Error(), testCase.wantErr.Error(), "incorrect error for Testcase %s", testName)
 			} else {
 				if testCase.requeue {
-					assert.Equal(t, ctrl.Result{RequeueAfter: time.Minute * 5}, ctrlResult, "incorrect ctrlResult for Testcase %s", testName)
+					if testCase.reconciler.joined {
+						assert.Equal(t, ctrl.Result{RequeueAfter: time.Minute * 5}, ctrlResult, "incorrect ctrlResult for Testcase %s", testName)
+					} else {
+						assert.Equal(t, ctrl.Result{RequeueAfter: time.Second * 5}, ctrlResult, "incorrect ctrlResult for Testcase %s", testName)
+					}
 				}
 				assert.Equalf(t, false, ctrlResult.Requeue, "incorrect ctrlResult for Testcase %s", testName)
 			}
@@ -719,7 +729,7 @@ func TestSetManifestHashAnnotation(t *testing.T) {
 		manifestObj interface{}
 		isSame      bool
 	}{
-		"manifest status changed": {
+		"manifest status changed, same": {
 			manifestObj: func() *appsv1.Deployment {
 				extraObj := manifestObj.DeepCopy()
 				extraObj.Status.ReadyReplicas = 10
@@ -727,7 +737,7 @@ func TestSetManifestHashAnnotation(t *testing.T) {
 			}(),
 			isSame: true,
 		},
-		"manifest's has hashAnnotation": {
+		"manifest's has hashAnnotation, same": {
 			manifestObj: func() *appsv1.Deployment {
 				alterObj := manifestObj.DeepCopy()
 				alterObj.Annotations[manifestHashAnnotation] = utilrand.String(10)
@@ -735,7 +745,7 @@ func TestSetManifestHashAnnotation(t *testing.T) {
 			}(),
 			isSame: true,
 		},
-		"manifest has extra metadata": {
+		"manifest has extra metadata, same": {
 			manifestObj: func() *appsv1.Deployment {
 				noObj := manifestObj.DeepCopy()
 				noObj.SetSelfLink(utilrand.String(2))
@@ -747,7 +757,16 @@ func TestSetManifestHashAnnotation(t *testing.T) {
 			}(),
 			isSame: true,
 		},
-		"manifest is has changed ownership": {
+		"manifest has a new appliedWork ownership, need update": {
+			manifestObj: func() *appsv1.Deployment {
+				alterObj := manifestObj.DeepCopy()
+				alterObj.OwnerReferences[0].APIVersion = workv1alpha1.GroupVersion.String()
+				alterObj.OwnerReferences[0].Kind = workv1alpha1.AppliedWorkKind
+				return alterObj
+			}(),
+			isSame: false,
+		},
+		"manifest is has changed ownership, need update": {
 			manifestObj: func() *appsv1.Deployment {
 				alterObj := manifestObj.DeepCopy()
 				alterObj.OwnerReferences[0].APIVersion = utilrand.String(10)
@@ -755,7 +774,7 @@ func TestSetManifestHashAnnotation(t *testing.T) {
 			}(),
 			isSame: false,
 		},
-		"manifest has a different label": {
+		"manifest has a different label, need update": {
 			manifestObj: func() *appsv1.Deployment {
 				alterObj := manifestObj.DeepCopy()
 				alterObj.SetLabels(map[string]string{utilrand.String(5): utilrand.String(10)})
@@ -763,7 +782,7 @@ func TestSetManifestHashAnnotation(t *testing.T) {
 			}(),
 			isSame: false,
 		},
-		"manifest has a different annotation": {
+		"manifest has a different annotation, need update": {
 			manifestObj: func() *appsv1.Deployment {
 				alterObj := manifestObj.DeepCopy()
 				alterObj.SetAnnotations(map[string]string{utilrand.String(5): utilrand.String(10)})
@@ -771,7 +790,7 @@ func TestSetManifestHashAnnotation(t *testing.T) {
 			}(),
 			isSame: false,
 		},
-		"manifest has a different spec": {
+		"manifest has a different spec, need update": {
 			manifestObj: func() *appsv1.Deployment {
 				alterObj := manifestObj.DeepCopy()
 				alterObj.Spec.Replicas = pointer.Int32Ptr(100)
@@ -856,10 +875,10 @@ func createObjAndDynamicClient(rawManifest []byte) (unstructured.Unstructured, d
 	unstructuredObj.SetAnnotations(map[string]string{manifestHashAnnotation: validSpecHash})
 	dynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
 	dynamicClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
-		return true, unstructuredObj, nil
+		return true, unstructuredObj.DeepCopy(), nil
 	})
 	dynamicClient.PrependReactor("patch", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
-		return true, unstructuredObj, nil
+		return true, unstructuredObj.DeepCopy(), nil
 	})
 	return *unstructuredObj, dynamicClient, validSpecHash
 }

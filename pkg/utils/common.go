@@ -32,6 +32,18 @@ func AddOwnerRef(ref metav1.OwnerReference, object metav1.Object) {
 	object.SetOwnerReferences(owners)
 }
 
+// MergeOwnerReference merges two owner reference arrays.
+func MergeOwnerReference(owners, newOwners []metav1.OwnerReference) []metav1.OwnerReference {
+	for _, newOwner := range newOwners {
+		if idx := indexOwnerRef(owners, newOwner); idx == -1 {
+			owners = append(owners, newOwner)
+		} else {
+			owners[idx] = newOwner
+		}
+	}
+	return owners
+}
+
 // indexOwnerRef returns the index of the owner reference in the slice if found, or -1.
 func indexOwnerRef(ownerReferences []metav1.OwnerReference, ref metav1.OwnerReference) int {
 	for index, r := range ownerReferences {
