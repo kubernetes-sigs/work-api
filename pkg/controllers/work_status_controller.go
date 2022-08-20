@@ -18,12 +18,14 @@ package controllers
 
 import (
 	"context"
-	"github.com/pkg/errors"
-	v1 "k8s.io/api/core/v1"
+	"fmt"
+	"time"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/record"
@@ -34,42 +36,42 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	"time"
 
 	workapi "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
-	"sigs.k8s.io/work-api/pkg/utils"
 )
+
+// TODO: merge this with the apply controller
 
 // WorkStatusReconciler reconciles a Work object when its status changes
 type WorkStatusReconciler struct {
-	appliedResourceTracker
-	recorder    record.EventRecorder
-	concurrency int
-	Joined      bool
+	hubClient          client.Client
+	spokeClient        client.Client
+	spokeDynamicClient dynamic.Interface
+	restMapper         meta.RESTMapper
+	recorder           record.EventRecorder
+	concurrency        int
+	joined             bool
 }
 
 func NewWorkStatusReconciler(hubClient client.Client, spokeDynamicClient dynamic.Interface, spokeClient client.Client, restMapper meta.RESTMapper, recorder record.EventRecorder, concurrency int, joined bool) *WorkStatusReconciler {
 	return &WorkStatusReconciler{
-		appliedResourceTracker: appliedResourceTracker{
-			hubClient:          hubClient,
-			spokeClient:        spokeClient,
-			spokeDynamicClient: spokeDynamicClient,
-			restMapper:         restMapper,
-		},
-		recorder:    recorder,
-		concurrency: concurrency,
-		Joined:      joined,
+		hubClient:          hubClient,
+		spokeClient:        spokeClient,
+		spokeDynamicClient: spokeDynamicClient,
+		restMapper:         restMapper,
+		recorder:           recorder,
+		concurrency:        concurrency,
+		joined:             joined,
 	}
 }
 
 // Reconcile implement the control loop logic for Work Status.
 func (r *WorkStatusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	klog.InfoS("Work Status controller reconcile loop triggered", "item", req.NamespacedName)
-
-	if !r.Joined {
-		klog.InfoS("work status controller is not started yet")
+	if !r.joined {
+		klog.V(3).InfoS("workStatus controller is not started yet, will requeue the request")
 		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 	}
+	klog.InfoS("workStatus controller reconcile loop is triggered", "item", req.NamespacedName)
 
 	work, appliedWork, err := r.fetchWorks(ctx, req.NamespacedName)
 	if err != nil {
@@ -82,36 +84,85 @@ func (r *WorkStatusReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	kLogObjRef := klog.KObj(work)
 
 	// from now on both work objects should exist
-	newRes, staleRes := r.calculateNewAppliedWork(work, appliedWork)
-	if err = r.deleteStaleWork(ctx, staleRes); err != nil {
-		klog.ErrorS(err, utils.MessageResourceGarbageCollectionIncomplete, work.Kind, kLogObjRef)
-		r.recorder.Event(work, v1.EventTypeWarning, utils.EventReasonResourceGarbageCollectionIncomplete, utils.MessageResourceGarbageCollectionIncomplete)
-
+	newRes, staleRes, genErr := r.generateDiff(ctx, work, appliedWork)
+	if genErr != nil {
+		klog.ErrorS(err, "failed to generate the diff between work status and appliedWork status", work.Kind, kLogObjRef)
+		return ctrl.Result{}, err
+	}
+	// delete all the manifests that should not be in the cluster.
+	if err = r.deleteStaleManifest(ctx, staleRes); err != nil {
+		klog.ErrorS(err, "resource garbage-collection incomplete; some Work owned resources could not be deleted", work.Kind, kLogObjRef)
 		// we can't proceed to update the applied
 		return ctrl.Result{}, err
-	} else if len(staleRes) > 0 && err == nil {
-		// TODO: Specify which manifest was deleted.
-		klog.InfoS(utils.MessageResourceGarbageCollectionComplete, work.Kind, kLogObjRef)
-		r.recorder.Event(work, v1.EventTypeNormal, utils.EventReasonResourceGarbageCollectionComplete, utils.MessageResourceGarbageCollectionComplete)
+	} else if len(staleRes) > 0 {
+		klog.V(3).InfoS("successfully garbage-collected all stale manifests", work.Kind, kLogObjRef, "number of GCed res", len(staleRes))
+		for _, res := range staleRes {
+			klog.V(5).InfoS("successfully garbage-collected a stale manifest", work.Kind, kLogObjRef, "res", res)
+		}
 	}
 
-	// update the appliedWork with the new work
+	// update the appliedWork with the new work after the stales are deleted
 	appliedWork.Status.AppliedResources = newRes
 	if err = r.spokeClient.Status().Update(ctx, appliedWork, &client.UpdateOptions{}); err != nil {
-		klog.ErrorS(err, utils.MessageResourceStatusUpdateFailed, appliedWork.Kind, appliedWork.GetName())
+		klog.ErrorS(err, "failed to update appliedWork status", appliedWork.Kind, appliedWork.GetName())
 		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
 }
 
-// calculateNewAppliedWork check the difference between what is supposed to be applied  (tracked by the work CR status)
+// Reconcile the difference between the work status/appliedWork status/what is on the member cluster
+// work.status represents what should be on the member cluster (it cannot be empty, we will reject empty work)
+// appliedWork.status represents what was on the member cluster (it's okay for it to be empty)
+// Objects in the appliedWork.status but not in the work.status should be removed from the member cluster.
+// We then go through all the work.status manifests whose condition is successfully applied
+// For each of them, we check if the object exists in the member cluster, if not, we recreate it according to the original manifest
+// We insert it into the new appliedWork.Status
+func (r *WorkStatusReconciler) fetchWorks(ctx context.Context, nsWorkName types.NamespacedName) (*workapi.Work, *workapi.AppliedWork, error) {
+	work := &workapi.Work{}
+	appliedWork := &workapi.AppliedWork{}
+
+	// fetch work CR from the hub cluster
+	err := r.hubClient.Get(ctx, nsWorkName, work)
+	switch {
+	case apierrors.IsNotFound(err):
+		klog.V(4).InfoS("work resource does not exist", "item", nsWorkName)
+		work = nil
+	case err != nil:
+		klog.ErrorS(err, "failed to get the work obj", "item", nsWorkName)
+		return nil, nil, err
+	default:
+		klog.V(5).InfoS("work exists in the hub cluster", "item", nsWorkName)
+	}
+
+	// fetch appliedWork CR from the member cluster
+	err = r.spokeClient.Get(ctx, nsWorkName, appliedWork)
+	switch {
+	case apierrors.IsNotFound(err):
+		klog.V(4).InfoS("appliedWork obj does not exist", "item", nsWorkName)
+		appliedWork = nil
+	case err != nil:
+		klog.ErrorS(err, "failed to get appliedWork", "item", nsWorkName)
+		return nil, nil, err
+	default:
+		klog.V(5).InfoS("appliedWork exists in the member cluster", "item", nsWorkName)
+	}
+
+	if err := checkConsistentExist(work, appliedWork, nsWorkName); err != nil {
+		klog.ErrorS(err, "applied/work object existence not consistent", "item", nsWorkName)
+		return nil, nil, err
+	}
+
+	return work, appliedWork, nil
+}
+
+// generateDiff check the difference between what is supposed to be applied  (tracked by the work CR status)
 // and what was applied in the member cluster (tracked by the appliedWork CR).
 // What is in the `appliedWork` but not in the `work` should be deleted from the member cluster
 // What is in the `work` but not in the `appliedWork` should be added to the appliedWork status
-func (r *WorkStatusReconciler) calculateNewAppliedWork(work *workapi.Work, appliedWork *workapi.AppliedWork) ([]workapi.AppliedResourceMeta, []workapi.AppliedResourceMeta) {
+func (r *WorkStatusReconciler) generateDiff(ctx context.Context, work *workapi.Work, appliedWork *workapi.AppliedWork) ([]workapi.AppliedResourceMeta, []workapi.AppliedResourceMeta, error) {
 	var staleRes, newRes []workapi.AppliedResourceMeta
-
+	// for every resource applied in cluster, check if it's still in the work's manifest condition
 	for _, resourceMeta := range appliedWork.Status.AppliedResources {
 		resStillExist := false
 		for _, manifestCond := range work.Status.ManifestConditions {
@@ -121,22 +172,17 @@ func (r *WorkStatusReconciler) calculateNewAppliedWork(work *workapi.Work, appli
 			}
 		}
 		if !resStillExist {
-			klog.V(3).InfoS(utils.MessageResourceIsOrphan,
-				"parent GVK", work.GetObjectKind().GroupVersionKind(),
-				"parent resource", work.GetName(),
-				"orphan resource", resourceMeta)
-
+			klog.V(5).InfoS("find an orphaned resource in the member cluster",
+				"parent resource", work.GetName(), "orphaned resource", resourceMeta.ResourceIdentifier)
 			staleRes = append(staleRes, resourceMeta)
 		}
 	}
-
+	// add every resource in the work's manifest condition that is applied successfully back to the appliedWork status
 	for _, manifestCond := range work.Status.ManifestConditions {
 		ac := meta.FindStatusCondition(manifestCond.Conditions, ConditionTypeApplied)
 		if ac == nil {
-			err := errors.New(utils.MessageResourceStateInvalid)
-			klog.ErrorS(err, utils.MessageResourceIsMissingCondition,
-				"resource", manifestCond.Identifier,
-				"missing condition", ConditionTypeApplied)
+			// should not happen
+			klog.ErrorS(fmt.Errorf("resource is missing  applied condition"), "applied condition missing", "resource", manifestCond.Identifier)
 			continue
 		}
 		// we only add the applied one to the appliedWork status
@@ -151,34 +197,45 @@ func (r *WorkStatusReconciler) calculateNewAppliedWork(work *workapi.Work, appli
 				}
 			}
 			if !resRecorded {
-				klog.V(5).InfoS(utils.MessageResourceDiscovered,
-					"parent GVK", work.GetObjectKind().GroupVersionKind(),
-					"parent Work", work.GetName(),
-					"discovered resource", manifestCond.Identifier)
-
+				klog.V(5).InfoS("discovered a new resource",
+					"parent Work", work.GetName(), "discovered resource", manifestCond.Identifier)
+				obj, err := r.spokeDynamicClient.Resource(schema.GroupVersionResource{
+					Group:    manifestCond.Identifier.Group,
+					Version:  manifestCond.Identifier.Version,
+					Resource: manifestCond.Identifier.Resource,
+				}).Namespace(manifestCond.Identifier.Namespace).Get(ctx, manifestCond.Identifier.Name, metav1.GetOptions{})
+				switch {
+				case apierrors.IsNotFound(err):
+					klog.V(4).InfoS("the manifest resource is deleted", "manifest", manifestCond.Identifier)
+					continue
+				case err != nil:
+					klog.ErrorS(err, "failed to retrieve the manifest", "manifest", manifestCond.Identifier)
+					return nil, nil, err
+				}
 				newRes = append(newRes, workapi.AppliedResourceMeta{
 					ResourceIdentifier: manifestCond.Identifier,
+					UID:                obj.GetUID(),
 				})
 			}
 		}
 	}
 
-	return newRes, staleRes
+	return newRes, staleRes, nil
 }
 
-func (r *WorkStatusReconciler) deleteStaleWork(ctx context.Context, staleWorks []workapi.AppliedResourceMeta) error {
+func (r *WorkStatusReconciler) deleteStaleManifest(ctx context.Context, staleManifests []workapi.AppliedResourceMeta) error {
 	var errs []error
 
-	for _, staleWork := range staleWorks {
+	for _, staleManifest := range staleManifests {
 		gvr := schema.GroupVersionResource{
-			Group:    staleWork.Group,
-			Version:  staleWork.Version,
-			Resource: staleWork.Resource,
+			Group:    staleManifest.Group,
+			Version:  staleManifest.Version,
+			Resource: staleManifest.Resource,
 		}
-		err := r.spokeDynamicClient.Resource(gvr).Namespace(staleWork.Namespace).
-			Delete(ctx, staleWork.Name, metav1.DeleteOptions{})
-		if err != nil && !apierrors.IsGone(err) {
-			klog.ErrorS(err, utils.MessageResourceDeleteFailed, "resource", staleWork)
+		err := r.spokeDynamicClient.Resource(gvr).Namespace(staleManifest.Namespace).
+			Delete(ctx, staleManifest.Name, metav1.DeleteOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			klog.ErrorS(err, "failed to delete the staled manifest", "manifest", staleManifest)
 			errs = append(errs, err)
 		}
 	}
@@ -202,7 +259,22 @@ func (r *WorkStatusReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// We only need to process the update event
+func checkConsistentExist(work *workapi.Work, appliedWork *workapi.AppliedWork, workName types.NamespacedName) error {
+	// work already deleted
+	if work == nil && appliedWork != nil {
+		return fmt.Errorf("work finalizer didn't delete the appliedWork %s", workName)
+	}
+	// we are triggered by appliedWork change or work update so the appliedWork should already be here
+	if work != nil && appliedWork == nil {
+		return fmt.Errorf("work controller didn't create the appliedWork %s", workName)
+	}
+	if work == nil && appliedWork == nil {
+		klog.InfoS("both applied and work are garbage collected", "item", workName)
+	}
+	return nil
+}
+
+// UpdateOnlyPredicate is used since we only need to process the update event
 type UpdateOnlyPredicate struct {
 	predicate.Funcs
 }
@@ -213,4 +285,15 @@ func (UpdateOnlyPredicate) Create(event.CreateEvent) bool {
 
 func (UpdateOnlyPredicate) Delete(event.DeleteEvent) bool {
 	return false
+}
+
+func (UpdateOnlyPredicate) Update(e event.UpdateEvent) bool {
+	if e.ObjectOld == nil {
+		return false
+	}
+	if e.ObjectNew == nil {
+		return false
+	}
+
+	return e.ObjectNew.GetResourceVersion() != e.ObjectOld.GetResourceVersion()
 }

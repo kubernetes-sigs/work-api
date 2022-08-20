@@ -65,13 +65,29 @@ rm hub-kubeconfig
 kubectl apply -k deploy
 ```
 
-### Run the controller against the Spoke cluster locally 
+### Run the controller against the Spoke cluster locally
+Create a secret in the Spoke cluster that contains the kubconfig file pointing to the hub and run your code against.
 ```shell
+kubectl create namespace fleet-system
 kubectl delete secret hub-kubeconfig-secret -n fleet-system
 kubectl create secret generic hub-kubeconfig-secret --from-file=kubeconfig=/Users/ryanzhang/.kube/hub -n fleet-system
-go run cmd/workcontroller/workcontroller.go --work-namespace=default --hub-secret=hub-kubeconfig-secret
+go run cmd/workcontroller/workcontroller.go --work-namespace=default --hub-kubeconfig-secret=hub-kubeconfig-secret -v 5 -add_dir_header
 ```
 
+### Run the e2e against a cluster locally
+Create a secret in the cluster that contains the kubconfig file pointing to itself. Run the feature code against it.
+```shell
+kubectl create namespace fleet-system
+kubectl delete secret hub-kubeconfig-secret -n fleet-system
+kubectl create secret generic hub-kubeconfig-secret --from-file=kubeconfig=/Users/ryanzhang/.kube/member-a -n fleet-system
+go run cmd/workcontroller/workcontroller.go --work-namespace=default --hub-kubeconfig-secret=hub-kubeconfig-secret -v 5 -add_dir_header
+
+```
+run the test in another window
+```
+export KUBECONFIG=kubeconfig=/Users/ryanzhang/.kube/member-a
+go test . -test.v -ginkgo.v
+```
 
 ### Deploy a Work on the Hub cluster
 On the `Hub` cluster terminal, run the following command:

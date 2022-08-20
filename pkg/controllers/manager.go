@@ -30,8 +30,8 @@ import (
 )
 
 const (
-	workFinalizer      = "multicluster.x-k8s.io/work-cleanup"
-	specHashAnnotation = "multicluster.x-k8s.io/spec-hash"
+	workFinalizer          = "multicluster.x-k8s.io/work-cleanup"
+	manifestHashAnnotation = "multicluster.x-k8s.io/spec-hash"
 
 	ConditionTypeApplied   = "Applied"
 	ConditionTypeAvailable = "Available"
@@ -92,16 +92,6 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 		true,
 	).SetupWithManager(hubMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Work")
-		return err
-	}
-
-	if err = NewFinalizeWorkReconciler(
-		hubMgr.GetClient(),
-		spokeClient,
-		hubMgr.GetEventRecorderFor("WorkFinalizer_controller"),
-		true,
-	).SetupWithManager(hubMgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "WorkFinalize")
 		return err
 	}
 
