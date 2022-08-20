@@ -51,7 +51,6 @@ import (
 
 var (
 	fakeDynamicClient = fake.NewSimpleDynamicClient(runtime.NewScheme())
-	appliedWork       = &workv1alpha1.AppliedWork{}
 	ownerRef          = metav1.OwnerReference{
 		APIVersion: workv1alpha1.GroupVersion.String(),
 		Kind:       "AppliedWork",
