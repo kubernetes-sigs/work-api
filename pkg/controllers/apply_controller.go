@@ -48,6 +48,8 @@ import (
 
 const (
 	workFieldManagerName = "work-api-agent"
+
+	AnnotationLastAppliedManifest = "fleet.azure.com/last-applied-manifest"
 )
 
 // ApplyWorkReconciler reconciles a Work object
@@ -267,10 +269,15 @@ func (r *ApplyWorkReconciler) decodeManifest(manifest workv1alpha1.Manifest) (sc
 func (r *ApplyWorkReconciler) applyUnstructured(ctx context.Context, gvr schema.GroupVersionResource, manifestObj *unstructured.Unstructured) (*unstructured.Unstructured, bool, error) {
 	manifestRef := klog.ObjectRef{
 		Name:      manifestObj.GetName(),
-		Namespace: manifestObj.GetName(),
+		Namespace: manifestObj.GetNamespace(),
 	}
+	if err := setManifestHashAnnotation(manifestObj); err != nil {
+		return nil, false, err
+	}
+
 	curObj, err := r.spokeDynamicClient.Resource(gvr).Namespace(manifestObj.GetNamespace()).Get(ctx, manifestObj.GetName(), metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
+	switch {
+	case apierrors.IsNotFound(err):
 		actual, createErr := r.spokeDynamicClient.Resource(gvr).Namespace(manifestObj.GetNamespace()).Create(
 			ctx, manifestObj, metav1.CreateOptions{FieldManager: workFieldManagerName})
 		if createErr == nil {
@@ -278,8 +285,7 @@ func (r *ApplyWorkReconciler) applyUnstructured(ctx context.Context, gvr schema.
 			return actual, true, nil
 		}
 		return nil, false, createErr
-	}
-	if err != nil {
+	case err != nil:
 		return nil, false, err
 	}
 
@@ -290,10 +296,6 @@ func (r *ApplyWorkReconciler) applyUnstructured(ctx context.Context, gvr schema.
 		return nil, false, err
 	}
 
-	err = setManifestHashAnnotation(manifestObj)
-	if err != nil {
-		return nil, false, err
-	}
 	// We only try to update the object if its spec hash value has changed.
 	if manifestObj.GetAnnotations()[manifestHashAnnotation] != curObj.GetAnnotations()[manifestHashAnnotation] {
 		return r.patchCurrentResource(ctx, gvr, manifestObj, curObj)
@@ -306,13 +308,11 @@ func (r *ApplyWorkReconciler) applyUnstructured(ctx context.Context, gvr schema.
 func (r *ApplyWorkReconciler) patchCurrentResource(ctx context.Context, gvr schema.GroupVersionResource, manifestObj, curObj *unstructured.Unstructured) (*unstructured.Unstructured, bool, error) {
 	manifestRef := klog.ObjectRef{
 		Name:      manifestObj.GetName(),
-		Namespace: manifestObj.GetName(),
+		Namespace: manifestObj.GetNamespace(),
 	}
 	klog.V(5).InfoS("manifest is modified", "gvr", gvr, "manifest", manifestRef,
 		"new hash", manifestObj.GetAnnotations()[manifestHashAnnotation],
 		"existing hash", curObj.GetAnnotations()[manifestHashAnnotation])
-	// merge owner refes since the patch does just replace
-	manifestObj.SetOwnerReferences(utils.MergeOwnerReference(curObj.GetOwnerReferences(), manifestObj.GetOwnerReferences()))
 
 	newData, err := manifestObj.MarshalJSON()
 	if err != nil {
@@ -365,7 +365,7 @@ func (r *ApplyWorkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: r.concurrency,
 		}).
-		For(&workv1alpha1.Work{}, builder.WithPredicates(predicate.ResourceVersionChangedPredicate{})).
+		For(&workv1alpha1.Work{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Complete(r)
 }
 

@@ -20,15 +20,13 @@ import (
 	"context"
 	"time"
 
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
-
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilrand "k8s.io/apimachinery/pkg/util/rand"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
@@ -42,27 +40,29 @@ var _ = Describe("Work Status Reconciler", func() {
 
 	const timeout = time.Second * 30
 	const interval = time.Second * 1
+	var wns corev1.Namespace
+	var rns corev1.Namespace
 
 	BeforeEach(func() {
-		workName = utilrand.String(5)
-		workNamespace = utilrand.String(5)
-		resourceName = utilrand.String(5)
+		workName = "work-" + utilrand.String(5)
+		workNamespace = "cluster-" + utilrand.String(5)
+		resourceName = "configmap-" + utilrand.String(5)
 		resourceNamespace = utilrand.String(5)
 
-		wns := &corev1.Namespace{
+		wns = corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: workNamespace,
 			},
 		}
-		_, err := k8sClient.CoreV1().Namespaces().Create(context.Background(), wns, metav1.CreateOptions{})
+		err := k8sClient.Create(context.Background(), &wns)
 		Expect(err).ToNot(HaveOccurred())
 
-		rns := &corev1.Namespace{
+		rns = corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: resourceNamespace,
 			},
 		}
-		_, err = k8sClient.CoreV1().Namespaces().Create(context.Background(), rns, metav1.CreateOptions{})
+		err = k8sClient.Create(context.Background(), &rns)
 		Expect(err).ToNot(HaveOccurred())
 
 		// Create the Work object with some type of Manifest resource.
@@ -96,14 +96,14 @@ var _ = Describe("Work Status Reconciler", func() {
 			},
 		}
 
-		createWorkErr := workClient.Create(context.Background(), work)
+		createWorkErr := k8sClient.Create(context.Background(), work)
 		Expect(createWorkErr).ToNot(HaveOccurred())
 
 		Eventually(func() bool {
 			namespacedName := types.NamespacedName{Name: workName, Namespace: workNamespace}
 
 			getAppliedWork := workv1alpha1.AppliedWork{}
-			err := workClient.Get(context.Background(), namespacedName, &getAppliedWork)
+			err := k8sClient.Get(context.Background(), namespacedName, &getAppliedWork)
 			if err == nil {
 				return getAppliedWork.Spec.WorkName == workName
 			}
@@ -113,51 +113,54 @@ var _ = Describe("Work Status Reconciler", func() {
 
 	AfterEach(func() {
 		// TODO: Ensure that all resources are being deleted.
-		err := k8sClient.CoreV1().Namespaces().Delete(context.Background(), workNamespace, metav1.DeleteOptions{})
+		err := k8sClient.Delete(context.Background(), &wns)
+		Expect(err).ToNot(HaveOccurred())
+
+		err = k8sClient.Delete(context.Background(), &rns)
 		Expect(err).ToNot(HaveOccurred())
 	})
 
 	Context("Receives a request where a Work's manifest condition does not contain the metadata of an existing AppliedResourceMeta", func() {
 		It("Should delete the resource from the spoke cluster", func() {
-			currentWork := workv1alpha1.Work{}
-			err := workClient.Get(context.Background(), types.NamespacedName{Name: workName, Namespace: workNamespace}, &currentWork)
-			Expect(err).ToNot(HaveOccurred())
+			currentWork := waitForWorkToApply(workName, workNamespace)
 
-			currentWork.Status.ManifestConditions = []workv1alpha1.ManifestCondition{}
+			By("wait for the resource to propagate to the appliedWork")
+			appliedWork := workv1alpha1.AppliedWork{}
+			Eventually(func() bool {
+				err := k8sClient.Get(context.Background(), types.NamespacedName{Name: workName}, &appliedWork)
+				Expect(err).ToNot(HaveOccurred())
+				return len(appliedWork.Status.AppliedResources) == 1
+			}, timeout, interval).Should(BeTrue())
 
-			err = workClient.Update(context.Background(), &currentWork)
-			Expect(err).ToNot(HaveOccurred())
+			By("Remove the resource from the works")
+			currentWork.Spec.Workload.Manifests = nil
+			Expect(k8sClient.Update(context.Background(), currentWork)).Should(Succeed())
 
 			Eventually(func() bool {
-				gvr := schema.GroupVersionResource{
-					Group:    "core",
-					Version:  "v1",
-					Resource: "ConfigMap",
-				}
-				_, err := dynamicClient.Resource(gvr).Namespace(resourceNamespace).Get(context.Background(), resourceName, metav1.GetOptions{})
-
-				return err != nil
+				var configMap corev1.ConfigMap
+				return apierrors.IsNotFound(k8sClient.Get(context.Background(), types.NamespacedName{Name: resourceName, Namespace: resourceNamespace}, &configMap))
 			}, timeout, interval).Should(BeTrue())
 		})
 	})
-	Context("Receives a request where a Work's manifest condition exists, but there"+
-		" isn't a respective AppliedResourceMeta.", func() {
+
+	// TODO: rewrite this test.
+	Context("Receives a request where a Work's manifest condition exists, but there isn't a respective AppliedResourceMeta.", func() {
 		It("should delete the AppliedResourceMeta from the respective AppliedWork status", func() {
 
 			appliedWork := workv1alpha1.AppliedWork{}
 			Eventually(func() error {
-				err := workClient.Get(context.Background(), types.NamespacedName{Name: workName, Namespace: workNamespace}, &appliedWork)
+				err := k8sClient.Get(context.Background(), types.NamespacedName{Name: workName, Namespace: workNamespace}, &appliedWork)
 				Expect(err).ToNot(HaveOccurred())
 
 				appliedWork.Status.AppliedResources = []workv1alpha1.AppliedResourceMeta{}
-				err = workClient.Update(context.Background(), &appliedWork)
+				err = k8sClient.Update(context.Background(), &appliedWork)
 
 				return err
 			}, timeout, interval).ShouldNot(HaveOccurred())
 
 			Eventually(func() bool {
 				namespacedName := types.NamespacedName{Name: workName, Namespace: workNamespace}
-				err := workClient.Get(context.Background(), namespacedName, &appliedWork)
+				err := k8sClient.Get(context.Background(), namespacedName, &appliedWork)
 				if err != nil {
 					return false
 				}
