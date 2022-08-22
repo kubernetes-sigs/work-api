@@ -108,7 +108,7 @@ var _ = Describe("Work Controller", func() {
 			Expect(configMap.Data["test"]).Should(Equal("test"))
 		})
 
-		FIt("Should pick up the manifest change correctly", func() {
+		It("Should pick up the manifest change correctly", func() {
 			cmName := "testserverapply"
 			cmNamespace := "default"
 			cm := &corev1.ConfigMap{
@@ -195,7 +195,7 @@ var _ = Describe("Work Controller", func() {
 			Expect(k8sClient.Update(context.Background(), resultWork)).Should(Succeed())
 
 			By("wait for the change of the work to be applied")
-			resultWork = waitForWorkToApply(work.GetName(), work.GetNamespace())
+			waitForWorkToApply(work.GetName(), work.GetNamespace())
 
 			By("Get the last applied config map")
 			Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: cmName, Namespace: cmNamespace}, &configMap)).Should(Succeed())

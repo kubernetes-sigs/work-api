@@ -218,7 +218,9 @@ func TestApplyManifest(t *testing.T) {
 }
 
 func TestApplyUnstructured(t *testing.T) {
-	correctObj, _, correctSpecHash := createObjAndDynamicClient(testManifest.Raw)
+	_, correctDynamicClient, correctSpecHash := createObjAndDynamicClient(testManifest.Raw)
+	correctObj := &unstructured.Unstructured{}
+	_ = correctObj.UnmarshalJSON(testManifest.Raw)
 
 	testDeploymentDiffSpec := testDeployment.DeepCopy()
 	testDeploymentDiffSpec.Spec.MinReadySeconds = 0
@@ -228,8 +230,9 @@ func TestApplyUnstructured(t *testing.T) {
 			Raw: rawDiffSpec,
 		},
 	}
-	diffSpecObj, diffSpecDynamicClient, diffSpecHash := createObjAndDynamicClient(testManifestDiffSpec.Raw)
-
+	_, diffSpecDynamicClient, diffSpecHash := createObjAndDynamicClient(testManifestDiffSpec.Raw)
+	diffSpecObj := &unstructured.Unstructured{}
+	_ = diffSpecObj.UnmarshalJSON(testManifestDiffSpec.Raw)
 	patchFailClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
 	patchFailClient.PrependReactor("patch", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
 		return true, nil, errors.New("patch failed")
@@ -326,6 +329,20 @@ func TestApplyUnstructured(t *testing.T) {
 			resultBool: false,
 			resultErr:  errors.New("resource is not managed by the work controller"),
 		},
+		"equal spec hash of current vs work object / succeed without updates": {
+			reconciler: ApplyWorkReconciler{
+				client:             &test.MockClient{},
+				spokeDynamicClient: correctDynamicClient,
+				spokeClient:        &test.MockClient{},
+				restMapper:         testMapper{},
+				recorder:           utils.NewFakeRecorder(1),
+				joined:             true,
+			},
+			workObj:        correctObj.DeepCopy(),
+			resultSpecHash: correctSpecHash,
+			resultBool:     false,
+			resultErr:      nil,
+		},
 		"unequal spec hash of current vs work object / client patch fail": {
 			reconciler: ApplyWorkReconciler{
 				spokeDynamicClient: patchFailClient,
@@ -346,7 +363,7 @@ func TestApplyUnstructured(t *testing.T) {
 				recorder:           utils.NewFakeRecorder(1),
 				joined:             true,
 			},
-			workObj:        &correctObj,
+			workObj:        correctObj,
 			resultSpecHash: diffSpecHash,
 			resultBool:     true,
 			resultErr:      nil,
@@ -854,17 +871,17 @@ func TestIsManifestManagedByWork(t *testing.T) {
 	}
 }
 
-func createObjAndDynamicClient(rawManifest []byte) (unstructured.Unstructured, dynamic.Interface, string) {
-	unstructuredObj := &unstructured.Unstructured{}
-	_ = unstructuredObj.UnmarshalJSON(rawManifest)
-	validSpecHash, _ := computeManifestHash(unstructuredObj)
-	unstructuredObj.SetAnnotations(map[string]string{manifestHashAnnotation: validSpecHash})
+func createObjAndDynamicClient(rawManifest []byte) (*unstructured.Unstructured, dynamic.Interface, string) {
+	uObj := unstructured.Unstructured{}
+	_ = uObj.UnmarshalJSON(rawManifest)
+	validSpecHash, _ := computeManifestHash(&uObj)
+	uObj.SetAnnotations(map[string]string{manifestHashAnnotation: validSpecHash})
 	dynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
 	dynamicClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
-		return true, unstructuredObj.DeepCopy(), nil
+		return true, uObj.DeepCopy(), nil
 	})
 	dynamicClient.PrependReactor("patch", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
-		return true, unstructuredObj.DeepCopy(), nil
+		return true, uObj.DeepCopy(), nil
 	})
-	return *unstructuredObj, dynamicClient, validSpecHash
+	return &uObj, dynamicClient, validSpecHash
 }
