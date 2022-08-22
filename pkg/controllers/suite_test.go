@@ -18,16 +18,16 @@ package controllers
 
 import (
 	"context"
+	"flag"
 	"os"
 	"path/filepath"
 	"testing"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -41,13 +41,11 @@ import (
 var (
 	cfg *rest.Config
 	// TODO: Seperate k8sClient into hub and spoke
-	k8sClient     kubernetes.Interface
-	workClient    client.Client
-	dynamicClient dynamic.Interface
-	testEnv       *envtest.Environment
-	setupLog      = ctrl.Log.WithName("test")
-	ctx           context.Context
-	cancel        context.CancelFunc
+	k8sClient client.Client
+	testEnv   *envtest.Environment
+	setupLog  = ctrl.Log.WithName("test")
+	ctx       context.Context
+	cancel    context.CancelFunc
 )
 
 func TestAPIs(t *testing.T) {
@@ -59,6 +57,11 @@ func TestAPIs(t *testing.T) {
 }
 
 var _ = BeforeSuite(func(done Done) {
+	By("Setup klog")
+	fs := flag.NewFlagSet("klog", flag.ContinueOnError)
+	klog.InitFlags(fs)
+	Expect(fs.Parse([]string{"--v", "5", "-add_dir_header", "true"})).Should(Succeed())
+
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths: []string{filepath.Join("../../", "config", "crd")},
@@ -72,20 +75,15 @@ var _ = BeforeSuite(func(done Done) {
 	err = workv1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
-	opts := ctrl.Options{
-		Scheme: scheme.Scheme,
-	}
-
-	k8sClient, err = kubernetes.NewForConfig(cfg)
-	Expect(err).NotTo(HaveOccurred())
-	workClient, err = client.New(cfg, client.Options{
+	k8sClient, err = client.New(cfg, client.Options{
 		Scheme: scheme.Scheme,
 	})
 	Expect(err).NotTo(HaveOccurred())
-	dynamicClient, err = dynamic.NewForConfig(cfg)
-	Expect(err).NotTo(HaveOccurred())
 
 	go func() {
+		opts := ctrl.Options{
+			Scheme: scheme.Scheme,
+		}
 		ctx, cancel = context.WithCancel(context.Background())
 		if err := Start(ctx, cfg, cfg, setupLog, opts); err != nil {
 			setupLog.Error(err, "problem running controllers")

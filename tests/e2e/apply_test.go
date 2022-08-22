@@ -469,7 +469,7 @@ var MultipleWorkWithSameManifestContext = func(description string, manifestFiles
 
 		})
 
-		It("should ignore the duplicate manifest", func() {
+		It("should apply both the duplicate manifest", func() {
 			By("creating the work one resources")
 			Expect(createWork(workOne)).To(Succeed())
 
