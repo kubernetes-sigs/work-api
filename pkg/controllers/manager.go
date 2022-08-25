@@ -30,8 +30,11 @@ import (
 )
 
 const (
-	workFinalizer          = "multicluster.x-k8s.io/work-cleanup"
-	manifestHashAnnotation = "multicluster.x-k8s.io/spec-hash"
+	workFinalizer = "fleet.azure.com/work-cleanup"
+
+	manifestHashAnnotation = "fleet.azure.com/spec-hash"
+
+	lastAppliedConfigAnnotation = "fleet.azure.com/last-applied-configuration"
 
 	ConditionTypeApplied   = "Applied"
 	ConditionTypeAvailable = "Available"
