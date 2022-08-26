@@ -139,8 +139,35 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			"work", kLogObjRef)
 		return ctrl.Result{}, utilerrors.NewAggregate(errs)
 	}
+
 	klog.InfoS("successfully applied the work to the cluster", "work", kLogObjRef)
 	r.recorder.Event(work, v1.EventTypeNormal, "ApplyWorkSucceed", "apply the work successfully")
+
+	// now we sync the status from work to appliedWork
+	newRes, staleRes, genErr := r.generateDiff(ctx, work, appliedWork)
+	if genErr != nil {
+		klog.ErrorS(err, "failed to generate the diff between work status and appliedWork status", work.Kind, kLogObjRef)
+		return ctrl.Result{}, err
+	}
+	// delete all the manifests that should not be in the cluster.
+	if err = r.deleteStaleManifest(ctx, staleRes, owner); err != nil {
+		klog.ErrorS(err, "resource garbage-collection incomplete; some Work owned resources could not be deleted", work.Kind, kLogObjRef)
+		// we can't proceed to update the applied
+		return ctrl.Result{}, err
+	} else if len(staleRes) > 0 {
+		klog.V(3).InfoS("successfully garbage-collected all stale manifests", work.Kind, kLogObjRef, "number of GCed res", len(staleRes))
+		for _, res := range staleRes {
+			klog.V(5).InfoS("successfully garbage-collected a stale manifest", work.Kind, kLogObjRef, "res", res)
+		}
+	}
+
+	// update the appliedWork with the new work after the stales are deleted
+	appliedWork.Status.AppliedResources = newRes
+	if err = r.spokeClient.Status().Update(ctx, appliedWork, &client.UpdateOptions{}); err != nil {
+		klog.ErrorS(err, "failed to update appliedWork status", appliedWork.Kind, appliedWork.GetName())
+		return ctrl.Result{}, err
+	}
+
 	// we periodically reconcile the work to make sure the member cluster state is in sync with the work
 	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
 }
