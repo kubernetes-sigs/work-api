@@ -24,7 +24,7 @@ func init() {
 
 // threeWayMergePatch creates a patch by computing a three-way diff based on
 // an object's current state, modified state, and last-applied-state recorded in its annotation.
-func threeWayMergePatch(currentObj, modifiedObj client.Object) (client.Patch, error) {
+func threeWayMergePatch(currentObj, manifestObj client.Object) (client.Patch, error) {
 	//TODO: see if we should use something like json.ConfigCompatibleWithStandardLibrary.Marshal to make sure that
 	// the json we created is compatible with the format that json merge patch requires.
 	current, err := json.Marshal(currentObj)
@@ -35,7 +35,7 @@ func threeWayMergePatch(currentObj, modifiedObj client.Object) (client.Patch, er
 	if err != nil {
 		return nil, err
 	}
-	modified, err := json.Marshal(modifiedObj)
+	manifest, err := json.Marshal(manifestObj)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +54,7 @@ func threeWayMergePatch(currentObj, modifiedObj client.Object) (client.Patch, er
 			mergepatch.RequireKeyUnchanged("apiVersion"),
 			mergepatch.RequireKeyUnchanged("kind"),
 			mergepatch.RequireMetadataKeyUnchanged("name")}
-		patchData, err = jsonmergepatch.CreateThreeWayJSONMergePatch(original, modified, current, preconditions...)
+		patchData, err = jsonmergepatch.CreateThreeWayJSONMergePatch(original, manifest, current, preconditions...)
 		if err != nil {
 			return nil, err
 		}
@@ -67,7 +67,7 @@ func threeWayMergePatch(currentObj, modifiedObj client.Object) (client.Patch, er
 		if err != nil {
 			return nil, err
 		}
-		patchData, err = strategicpatch.CreateThreeWayMergePatch(original, modified, current, lookupPatchMeta, true)
+		patchData, err = strategicpatch.CreateThreeWayMergePatch(original, manifest, current, lookupPatchMeta, true)
 		if err != nil {
 			return nil, err
 		}

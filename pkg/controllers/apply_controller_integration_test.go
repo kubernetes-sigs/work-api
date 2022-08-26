@@ -21,17 +21,17 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	"github.com/google/go-cmp/cmp"
 	kruisev1alpha1 "github.com/openkruise/kruise/apis/apps/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	utilrand "k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/utils/pointer"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
@@ -42,6 +42,8 @@ const interval = time.Second * 1
 var _ = Describe("Work Controller", func() {
 	var workNamespace string
 	var ns corev1.Namespace
+	var cm *corev1.ConfigMap
+	var work *workv1alpha1.Work
 
 	BeforeEach(func() {
 		workNamespace = "work-" + utilrand.String(5)
@@ -61,11 +63,11 @@ var _ = Describe("Work Controller", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	Context("Deploy manifests by work", func() {
+	Context("Test work propagation", func() {
 		It("Should have a configmap deployed correctly", func() {
 			cmName := "testcm"
 			cmNamespace := "default"
-			cm := &corev1.ConfigMap{
+			cm = &corev1.ConfigMap{
 				TypeMeta: metav1.TypeMeta{
 					APIVersion: "v1",
 					Kind:       "ConfigMap",
@@ -79,22 +81,8 @@ var _ = Describe("Work Controller", func() {
 				},
 			}
 
-			work := &workv1alpha1.Work{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-work",
-					Namespace: workNamespace,
-				},
-				Spec: workv1alpha1.WorkSpec{
-					Workload: workv1alpha1.WorkloadTemplate{
-						Manifests: []workv1alpha1.Manifest{
-							{
-								RawExtension: runtime.RawExtension{Object: cm},
-							},
-						},
-					},
-				},
-			}
 			By("create the work")
+			work = createWorkWithManifest(workNamespace, cm)
 			err := k8sClient.Create(context.Background(), work)
 			Expect(err).ToNot(HaveOccurred())
 
@@ -102,18 +90,29 @@ var _ = Describe("Work Controller", func() {
 			Expect(len(resultWork.Status.ManifestConditions)).Should(Equal(1))
 			Expect(meta.IsStatusConditionTrue(resultWork.Status.Conditions, ConditionTypeApplied)).Should(BeTrue())
 			Expect(meta.IsStatusConditionTrue(resultWork.Status.ManifestConditions[0].Conditions, ConditionTypeApplied)).Should(BeTrue())
+			expectedResourceId := workv1alpha1.ResourceIdentifier{
+				Ordinal:   0,
+				Group:     "",
+				Version:   "v1",
+				Kind:      "ConfigMap",
+				Resource:  "configmaps",
+				Namespace: cmNamespace,
+				Name:      cm.Name,
+			}
+			Expect(cmp.Diff(resultWork.Status.ManifestConditions[0].Identifier, expectedResourceId)).Should(BeEmpty())
 
 			By("Check applied config map")
 			var configMap corev1.ConfigMap
 			Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: cmName, Namespace: cmNamespace}, &configMap)).Should(Succeed())
-			Expect(len(configMap.Data)).Should(Equal(1))
-			Expect(configMap.Data["test"]).Should(Equal("test"))
+			Expect(cmp.Diff(configMap.Labels, cm.Labels)).Should(BeEmpty())
+			Expect(cmp.Diff(configMap.Data, cm.Data)).Should(BeEmpty())
+
 		})
 
 		It("Should pick up the built-in manifest change correctly", func() {
 			cmName := "testconfig"
 			cmNamespace := "default"
-			cm := &corev1.ConfigMap{
+			cm = &corev1.ConfigMap{
 				TypeMeta: metav1.TypeMeta{
 					APIVersion: "v1",
 					Kind:       "ConfigMap",
@@ -135,48 +134,17 @@ var _ = Describe("Work Controller", func() {
 				},
 			}
 
-			work := &workv1alpha1.Work{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "testmetachangework",
-					Namespace: workNamespace,
-				},
-				Spec: workv1alpha1.WorkSpec{
-					Workload: workv1alpha1.WorkloadTemplate{
-						Manifests: []workv1alpha1.Manifest{
-							{
-								RawExtension: runtime.RawExtension{Object: cm},
-							},
-						},
-					},
-				},
-			}
 			By("create the work")
-			err := k8sClient.Create(context.Background(), work)
-			Expect(err).ToNot(HaveOccurred())
+			work = createWorkWithManifest(workNamespace, cm)
+			Expect(k8sClient.Create(context.Background(), work)).ToNot(HaveOccurred())
 
 			By("wait for the work to be applied")
 			waitForWorkToApply(work.GetName(), work.GetNamespace())
 
 			By("Check applied config map")
-			var appliedCM corev1.ConfigMap
-			Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: cmName, Namespace: cmNamespace}, &appliedCM)).Should(Succeed())
+			verifyAppliedConfigMap(cm)
 
-			By("Check the config map label")
-			Expect(len(appliedCM.Labels)).Should(Equal(2))
-			Expect(cmp.Diff(appliedCM.Labels, cm.Labels)).Should(BeEmpty())
-
-			By("Check the config map annotation value")
-			Expect(len(appliedCM.Annotations)).Should(Equal(4)) // we added 2 more annotations
-			Expect(appliedCM.Annotations["annotationKey1"]).Should(Equal(cm.Annotations["annotationKey1"]))
-			Expect(appliedCM.Annotations["annotationKey2"]).Should(Equal(cm.Annotations["annotationKey2"]))
-			Expect(appliedCM.Annotations[manifestHashAnnotation]).ShouldNot(BeNil())
-			Expect(appliedCM.Annotations[lastAppliedConfigAnnotation]).ShouldNot(BeNil())
-
-			By("Check the config map data")
-			Expect(len(appliedCM.Data)).Should(Equal(1))
-			Expect(cmp.Diff(appliedCM.Data, cm.Data)).Should(BeEmpty())
-
-			By("Modify the configMap")
+			By("Modify the configMap manifest")
 			// add new data
 			cm.Data["data2"] = "test2"
 			// modify one data
@@ -200,24 +168,102 @@ var _ = Describe("Work Controller", func() {
 			By("wait for the change of the work to be applied")
 			waitForWorkToApply(work.GetName(), work.GetNamespace())
 
+			By("verify that applied configMap took all the changes")
+			verifyAppliedConfigMap(cm)
+		})
+
+		It("Should merge the third party change correctly", func() {
+			cmName := "test-merge"
+			cmNamespace := "default"
+			cm = &corev1.ConfigMap{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "v1",
+					Kind:       "ConfigMap",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      cmName,
+					Namespace: cmNamespace,
+					Labels: map[string]string{
+						"labelKey1": "value1",
+						"labelKey2": "value2",
+						"labelKey3": "value3",
+					},
+				},
+				Data: map[string]string{
+					"data1": "test1",
+				},
+			}
+
+			By("create the work")
+			work = createWorkWithManifest(workNamespace, cm)
+			err := k8sClient.Create(context.Background(), work)
+			Expect(err).ToNot(HaveOccurred())
+
+			By("wait for the work to be applied")
+			waitForWorkToApply(work.GetName(), work.GetNamespace())
+
+			By("Check applied configMap")
+			appliedCM := verifyAppliedConfigMap(cm)
+
+			By("Modify and update the applied configMap")
+			// add a new data
+			appliedCM.Data["data2"] = "another value"
+			// add a new data
+			appliedCM.Data["data3"] = "added data by third party"
+			// modify label key1
+			appliedCM.Labels["labelKey1"] = "third-party-label"
+			// remove label key2 and key3
+			delete(cm.Labels, "labelKey2")
+			delete(cm.Labels, "labelKey3")
+			Expect(k8sClient.Update(context.Background(), appliedCM)).Should(Succeed())
+
+			By("Get the last applied config map and verify it's updated")
+			var modifiedCM corev1.ConfigMap
+			Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: cm.GetName(), Namespace: cm.GetNamespace()}, &modifiedCM)).Should(Succeed())
+			Expect(cmp.Diff(appliedCM.Labels, modifiedCM.Labels)).Should(BeEmpty())
+			Expect(cmp.Diff(appliedCM.Data, modifiedCM.Data)).Should(BeEmpty())
+
+			By("Modify the manifest")
+			// modify one data
+			cm.Data["data1"] = "modifiedValue"
+			// add a conflict data
+			cm.Data["data2"] = "added by manifest"
+			// change label key3 with a new value
+			cm.Labels["labelKey3"] = "added-back-by-manifest"
+
+			By("update the work")
+			resultWork := waitForWorkToApply(work.GetName(), work.GetNamespace())
+			rawCM, err := json.Marshal(cm)
+			Expect(err).Should(Succeed())
+			resultWork.Spec.Workload.Manifests[0].Raw = rawCM
+			Expect(k8sClient.Update(context.Background(), resultWork)).Should(Succeed())
+
+			By("wait for the change of the work to be applied")
+			waitForWorkToApply(work.GetName(), work.GetNamespace())
+
 			By("Get the last applied config map")
-			Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: cmName, Namespace: cmNamespace}, &appliedCM)).Should(Succeed())
+			Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: cmName, Namespace: cmNamespace}, appliedCM)).Should(Succeed())
 
 			By("Check the config map data")
-			Expect(len(appliedCM.Data)).Should(Equal(2))
-			Expect(cmp.Diff(appliedCM.Data, cm.Data)).Should(BeEmpty())
+			// data1's value picks up our change
+			// data2 is value is overridden by our change
+			// data3 is added by the third party
+			expectedData := map[string]string{
+				"data1": "modifiedValue",
+				"data2": "added by manifest",
+				"data3": "added data by third party",
+			}
+			Expect(cmp.Diff(appliedCM.Data, expectedData)).Should(BeEmpty())
 
 			By("Check the config map label")
-			Expect(len(appliedCM.Labels)).Should(Equal(1))
-			Expect(cmp.Diff(appliedCM.Labels, cm.Labels)).Should(BeEmpty())
-
-			By("Check the config map annotation value")
-			Expect(len(appliedCM.Annotations)).Should(Equal(4)) // we added two more annotation (manifest hash)
-			_, found := appliedCM.Annotations["annotationKey1"]
-			Expect(found).Should(BeFalse())
-			Expect(appliedCM.Annotations["annotationKey2"]).Should(Equal(cm.Annotations["annotationKey2"]))
-			Expect(appliedCM.Annotations["annotationKey3"]).Should(Equal(cm.Annotations["annotationKey3"]))
-
+			// key1's value is override back even if we didn't change it
+			// key2 is deleted by third party since we didn't change it
+			// key3's value added back after we change the value
+			expectedLabel := map[string]string{
+				"labelKey1": "value1",
+				"labelKey3": "added-back-by-manifest",
+			}
+			Expect(cmp.Diff(appliedCM.Labels, expectedLabel)).Should(BeEmpty())
 		})
 
 		It("Should pick up the crd change correctly", func() {
@@ -231,41 +277,26 @@ var _ = Describe("Work Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      cloneName,
 					Namespace: cloneNamespace,
-					Labels: map[string]string{
-						"labelKey1": "value1",
-						"labelKey2": "value2",
-					},
-					Annotations: map[string]string{
-						"annotationKey1": "annotation1",
-						"annotationKey2": "annotation2",
-					},
 				},
 				Spec: kruisev1alpha1.CloneSetSpec{
 					Selector: &metav1.LabelSelector{
-						MatchLabels: map[string]string{
-							"labelKey1": "value1",
-							"labelKey2": "value2",
-						},
-					},
-				},
-			}
-
-			work := &workv1alpha1.Work{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "testworkcheck",
-					Namespace: workNamespace,
-				},
-				Spec: workv1alpha1.WorkSpec{
-					Workload: workv1alpha1.WorkloadTemplate{
-						Manifests: []workv1alpha1.Manifest{
+						MatchExpressions: []metav1.LabelSelectorRequirement{
 							{
-								RawExtension: runtime.RawExtension{Object: cloneSet},
+								Key:      "region",
+								Operator: metav1.LabelSelectorOpNotIn,
+								Values:   []string{"us", "eu"},
+							},
+							{
+								Key:      "prod",
+								Operator: metav1.LabelSelectorOpDoesNotExist,
 							},
 						},
 					},
 				},
 			}
+
 			By("create the work")
+			work = createWorkWithManifest(workNamespace, cloneSet)
 			err := k8sClient.Create(context.Background(), work)
 			Expect(err).ToNot(HaveOccurred())
 
@@ -276,89 +307,153 @@ var _ = Describe("Work Controller", func() {
 			var appliedCloneSet kruisev1alpha1.CloneSet
 			Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: cloneName, Namespace: cloneNamespace}, &appliedCloneSet)).Should(Succeed())
 
-			By("Check the cloneset label")
-			Expect(len(appliedCloneSet.Labels)).Should(Equal(2))
-			Expect(cmp.Diff(appliedCloneSet.Labels, cloneSet.Labels)).Should(BeEmpty())
+			By("verify the CloneSet spec")
+			Expect(cmp.Diff(appliedCloneSet.Spec, cloneSet.Spec)).Should(BeEmpty())
 
-			By("Check the cloneset annotation value")
-			Expect(len(appliedCloneSet.Annotations)).Should(Equal(4)) // we added 2 more annotations
-			Expect(appliedCloneSet.Annotations["annotationKey1"]).Should(Equal(cloneSet.Annotations["annotationKey1"]))
-			Expect(appliedCloneSet.Annotations["annotationKey2"]).Should(Equal(cloneSet.Annotations["annotationKey2"]))
-			Expect(appliedCloneSet.Annotations[lastAppliedConfigAnnotation]).ShouldNot(BeNil())
-			Expect(appliedCloneSet.Annotations[lastAppliedConfigAnnotation]).ShouldNot(BeNil())
+			By("Modify and update the applied CloneSet")
+			// add/modify/remove a match
+			appliedCloneSet.Spec.Selector.MatchExpressions = []metav1.LabelSelectorRequirement{
+				{
+					Key:      "region",
+					Operator: metav1.LabelSelectorOpNotIn,
+					Values:   []string{"asia"},
+				},
+				{
+					Key:      "extra",
+					Operator: metav1.LabelSelectorOpExists,
+				},
+			}
+			appliedCloneSet.Spec.ScaleStrategy.PodsToDelete = []string{"a", "b"}
+			appliedCloneSet.Spec.MinReadySeconds = 10
+			Expect(k8sClient.Update(context.Background(), &appliedCloneSet)).Should(Succeed())
 
-			By("Check the cloneset data")
-			Expect(len(appliedCloneSet.Spec.Selector.MatchLabels)).Should(Equal(2))
-			Expect(cmp.Diff(appliedCloneSet.Spec.Selector.MatchLabels, cloneSet.Spec.Selector.MatchLabels)).Should(BeEmpty())
+			By("Verify applied CloneSet modified")
+			var modifiedCloneSet kruisev1alpha1.CloneSet
+			Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: cloneName, Namespace: cloneNamespace}, &modifiedCloneSet)).Should(Succeed())
+			Expect(cmp.Diff(appliedCloneSet.Spec, modifiedCloneSet.Spec)).Should(BeEmpty())
 
 			By("Modify the cloneset")
-			// add new selecter
-			cloneSet.Spec.Selector.MatchLabels["labelKey3"] = "value3"
-			// modify one data
-			cloneSet.Spec.Selector.MatchLabels["labelKey1"] = "newValue"
-			// delete one data
-			delete(cloneSet.Spec.Selector.MatchLabels, "labelKey2")
-			Expect(len(cloneSet.Spec.Selector.MatchLabels)).Should(Equal(2))
-			// modify label key1
-			cloneSet.Labels["labelKey1"] = "newValue"
-			// remove label key2
-			delete(cloneSet.Labels, "labelKey2")
-			// add annotations key3
-			cloneSet.Annotations["annotationKey3"] = "annotation3"
-			// remove annotations key1
-			delete(cloneSet.Annotations, "annotationKey1")
-
+			cloneSet.Spec.Selector.MatchExpressions = []metav1.LabelSelectorRequirement{
+				{
+					Key:      "region",
+					Operator: metav1.LabelSelectorOpNotIn,
+					Values:   []string{"us", "asia", "eu"},
+				},
+			}
+			cloneSet.Spec.Replicas = pointer.Int32Ptr(10)
+			cloneSet.Spec.MinReadySeconds = 1
+			maxuavail := intstr.FromInt(10)
+			cloneSet.Spec.ScaleStrategy.MaxUnavailable = &maxuavail
 			By("update the work")
 			resultWork := waitForWorkToApply(work.GetName(), work.GetNamespace())
 			rawCM, err := json.Marshal(cloneSet)
 			Expect(err).Should(Succeed())
 			resultWork.Spec.Workload.Manifests[0].Raw = rawCM
 			Expect(k8sClient.Update(context.Background(), resultWork)).Should(Succeed())
-
-			By("wait for the change of the work to be applied")
 			waitForWorkToApply(work.GetName(), work.GetNamespace())
 
 			By("Get the last applied cloneset")
 			Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: cloneName, Namespace: cloneNamespace}, &appliedCloneSet)).Should(Succeed())
 
-			By("Check the cloneset label")
-			Expect(len(appliedCloneSet.Labels)).Should(Equal(1))
-			Expect(cmp.Diff(appliedCloneSet.Labels, cloneSet.Labels)).Should(BeEmpty())
-
-			By("Check the cloneset annotation value")
-			Expect(len(appliedCloneSet.Annotations)).Should(Equal(4)) // we added two more annotation (manifest hash)
-			_, found := appliedCloneSet.Annotations["annotationKey1"]
-			Expect(found).Should(BeFalse())
-			Expect(appliedCloneSet.Annotations["annotationKey2"]).Should(Equal(cloneSet.Annotations["annotationKey2"]))
-			Expect(appliedCloneSet.Annotations["annotationKey3"]).Should(Equal(cloneSet.Annotations["annotationKey3"]))
-
-			By("Check the cloneset spec")
-			Expect(len(appliedCloneSet.Spec.Selector.MatchLabels)).Should(Equal(2))
-			Expect(cmp.Diff(appliedCloneSet.Spec.Selector.MatchLabels, cloneSet.Spec.Selector.MatchLabels)).Should(BeEmpty())
+			By("Check the cloneset spec, its an overide for arrays")
+			expectStrategy := kruisev1alpha1.CloneSetScaleStrategy{
+				PodsToDelete:   []string{"a", "b"},
+				MaxUnavailable: &maxuavail,
+			}
+			Expect(cmp.Diff(appliedCloneSet.Spec.ScaleStrategy, expectStrategy)).Should(BeEmpty())
+			Expect(cmp.Diff(appliedCloneSet.Spec.Selector, cloneSet.Spec.Selector)).Should(BeEmpty())
+			Expect(cmp.Diff(appliedCloneSet.Spec.Replicas, pointer.Int32Ptr(10))).Should(BeEmpty())
+			Expect(cmp.Diff(appliedCloneSet.Spec.MinReadySeconds, int32(1))).Should(BeEmpty())
 		})
 
+		It("Check that owner references is merged instead of override", func() {
+			cmName := "test-ownerreference-merge"
+			cmNamespace := "default"
+			cm = &corev1.ConfigMap{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "v1",
+					Kind:       "ConfigMap",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      cmName,
+					Namespace: cmNamespace,
+				},
+				Data: map[string]string{
+					"test": "test",
+				},
+			}
+
+			By("create the work")
+			work = createWorkWithManifest(workNamespace, cm)
+			Expect(k8sClient.Create(context.Background(), work)).ToNot(HaveOccurred())
+
+			By("create another work that includes the configMap")
+			work2 := createWorkWithManifest(workNamespace, cm)
+			Expect(k8sClient.Create(context.Background(), work2)).ToNot(HaveOccurred())
+
+			By("wait for the change of the work1 to be applied")
+			waitForWorkToApply(work.GetName(), work.GetNamespace())
+
+			By("wait for the change of the work2 to be applied")
+			waitForWorkToApply(work2.GetName(), work2.GetNamespace())
+
+			By("verify the owner reference is merged")
+			var appliedCM corev1.ConfigMap
+			Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: cm.GetName(), Namespace: cm.GetNamespace()}, &appliedCM)).Should(Succeed())
+
+			By("Check the config map label")
+			Expect(len(appliedCM.OwnerReferences)).Should(Equal(2))
+			Expect(appliedCM.OwnerReferences[0].APIVersion).Should(Equal(workv1alpha1.GroupVersion.String()))
+			Expect(appliedCM.OwnerReferences[0].Name).Should(SatisfyAny(Equal(work.GetName()), Equal(work2.GetName())))
+			Expect(appliedCM.OwnerReferences[1].APIVersion).Should(Equal(workv1alpha1.GroupVersion.String()))
+			Expect(appliedCM.OwnerReferences[1].Name).Should(SatisfyAny(Equal(work.GetName()), Equal(work2.GetName())))
+		})
+
+		It("Check that failed to apply manifest has the proper identification", func() {
+			broadcastName := "testfail"
+			namespace := "default"
+			broadcastJob := &kruisev1alpha1.BroadcastJob{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: kruisev1alpha1.SchemeGroupVersion.String(),
+					Kind:       "BroadcastJob",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      broadcastName,
+					Namespace: namespace,
+				},
+				Spec: kruisev1alpha1.BroadcastJobSpec{
+					Paused: true,
+				},
+			}
+			work = createWorkWithManifest(workNamespace, broadcastJob)
+			err := k8sClient.Create(context.Background(), work)
+			Expect(err).ToNot(HaveOccurred())
+
+			By("wait for the work to be applied")
+			var resultWork workv1alpha1.Work
+			Eventually(func() bool {
+				err := k8sClient.Get(context.Background(), types.NamespacedName{Name: work.Name, Namespace: work.GetNamespace()}, &resultWork)
+				if err != nil {
+					return false
+				}
+				applyCond := meta.FindStatusCondition(resultWork.Status.Conditions, ConditionTypeApplied)
+				if applyCond == nil || applyCond.Status != metav1.ConditionFalse || applyCond.ObservedGeneration != resultWork.Generation {
+					return false
+				}
+				if !meta.IsStatusConditionFalse(resultWork.Status.ManifestConditions[0].Conditions, ConditionTypeApplied) {
+					return false
+				}
+				return true
+			}, timeout, interval).Should(BeTrue())
+			expectedResourceId := workv1alpha1.ResourceIdentifier{
+				Ordinal:   0,
+				Group:     "apps.kruise.io",
+				Version:   "v1alpha1",
+				Kind:      "BroadcastJob",
+				Namespace: broadcastJob.GetNamespace(),
+				Name:      broadcastJob.GetName(),
+			}
+			Expect(cmp.Diff(resultWork.Status.ManifestConditions[0].Identifier, expectedResourceId)).Should(BeEmpty())
+		})
 	})
 })
-
-func waitForWorkToApply(workName, workNS string) *workv1alpha1.Work {
-	By("Wait for the work to be applied")
-	var resultWork workv1alpha1.Work
-	Eventually(func() bool {
-		err := k8sClient.Get(context.Background(), types.NamespacedName{Name: workName, Namespace: workNS}, &resultWork)
-		if err != nil {
-			return false
-		}
-		if len(resultWork.Status.ManifestConditions) != 1 {
-			return false
-		}
-		if !meta.IsStatusConditionTrue(resultWork.Status.ManifestConditions[0].Conditions, ConditionTypeApplied) {
-			return false
-		}
-		applyCond := meta.FindStatusCondition(resultWork.Status.Conditions, ConditionTypeApplied)
-		if applyCond.Status != metav1.ConditionTrue || applyCond.ObservedGeneration != resultWork.Generation {
-			return false
-		}
-		return true
-	}, timeout, interval).Should(BeTrue())
-	return &resultWork
-}

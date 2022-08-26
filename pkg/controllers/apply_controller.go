@@ -139,7 +139,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			"work", kLogObjRef)
 		return ctrl.Result{}, utilerrors.NewAggregate(errs)
 	}
-	klog.InfoS("apply the work successfully ", "work", kLogObjRef)
+	klog.InfoS("successfully applied the work to the cluster", "work", kLogObjRef)
 	r.recorder.Event(work, v1.EventTypeNormal, "ApplyWorkSucceed", "apply the work successfully")
 	// we periodically reconcile the work to make sure the member cluster state is in sync with the work
 	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
@@ -218,13 +218,23 @@ func (r *ApplyWorkReconciler) applyManifests(ctx context.Context, manifests []wo
 	var appliedObj *unstructured.Unstructured
 
 	for index, manifest := range manifests {
-		result := applyResult{
-			identifier: workv1alpha1.ResourceIdentifier{Ordinal: index},
-		}
+		var result applyResult
 		gvr, rawObj, err := r.decodeManifest(manifest)
-		if err != nil {
+		switch {
+		case err != nil:
 			result.err = err
-		} else {
+			result.identifier = workv1alpha1.ResourceIdentifier{
+				Ordinal: index,
+			}
+			if rawObj != nil {
+				result.identifier.Group = rawObj.GroupVersionKind().Group
+				result.identifier.Version = rawObj.GroupVersionKind().Version
+				result.identifier.Kind = rawObj.GroupVersionKind().Kind
+				result.identifier.Namespace = rawObj.GetNamespace()
+				result.identifier.Name = rawObj.GetName()
+			}
+
+		default:
 			addOwnerRef(owner, rawObj)
 			appliedObj, result.updated, result.err = r.applyUnstructured(ctx, gvr, rawObj)
 			result.identifier = buildResourceIdentifier(index, rawObj, gvr)
@@ -258,7 +268,7 @@ func (r *ApplyWorkReconciler) decodeManifest(manifest workv1alpha1.Manifest) (sc
 
 	mapping, err := r.restMapper.RESTMapping(unstructuredObj.GroupVersionKind().GroupKind(), unstructuredObj.GroupVersionKind().Version)
 	if err != nil {
-		return schema.GroupVersionResource{}, nil, fmt.Errorf("failed to find group/version/resource from restmapping: %w", err)
+		return schema.GroupVersionResource{}, unstructuredObj, fmt.Errorf("failed to find group/version/resource from restmapping: %w", err)
 	}
 
 	return mapping.Resource, unstructuredObj, nil
@@ -283,7 +293,7 @@ func (r *ApplyWorkReconciler) applyUnstructured(ctx context.Context, gvr schema.
 		}
 		actual, err := r.spokeDynamicClient.Resource(gvr).Namespace(manifestObj.GetNamespace()).Create(
 			ctx, manifestObj, metav1.CreateOptions{FieldManager: workFieldManagerName})
-		if err == nil || apierrors.IsAlreadyExists(err) {
+		if err == nil {
 			klog.V(4).InfoS("successfully created the manifest", "gvr", gvr, "manifest", manifestRef)
 			return actual, true, nil
 		}
@@ -485,17 +495,15 @@ func setManifestHashAnnotation(manifestObj *unstructured.Unstructured) error {
 
 // Builds a resource identifier for a given unstructured.Unstructured object.
 func buildResourceIdentifier(index int, object *unstructured.Unstructured, gvr schema.GroupVersionResource) workv1alpha1.ResourceIdentifier {
-	identifier := workv1alpha1.ResourceIdentifier{
-		Ordinal: index,
+	return workv1alpha1.ResourceIdentifier{
+		Ordinal:   index,
+		Group:     object.GroupVersionKind().Group,
+		Version:   object.GroupVersionKind().Version,
+		Kind:      object.GroupVersionKind().Kind,
+		Namespace: object.GetNamespace(),
+		Name:      object.GetName(),
+		Resource:  gvr.Resource,
 	}
-	identifier.Group = object.GroupVersionKind().Group
-	identifier.Version = object.GroupVersionKind().Version
-	identifier.Kind = object.GroupVersionKind().Kind
-	identifier.Namespace = object.GetNamespace()
-	identifier.Name = object.GetName()
-	identifier.Resource = gvr.Resource
-
-	return identifier
 }
 
 func buildManifestAppliedCondition(err error, updated bool, observedGeneration int64) metav1.Condition {
