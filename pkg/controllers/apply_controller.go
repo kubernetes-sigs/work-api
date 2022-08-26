@@ -43,7 +43,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
-	"sigs.k8s.io/work-api/pkg/utils"
 )
 
 const (
@@ -140,7 +139,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			"work", kLogObjRef)
 		return ctrl.Result{}, utilerrors.NewAggregate(errs)
 	}
-	klog.InfoS("apply the work successfully ", "work", kLogObjRef)
+	klog.InfoS("successfully applied the work to the cluster", "work", kLogObjRef)
 	r.recorder.Event(work, v1.EventTypeNormal, "ApplyWorkSucceed", "apply the work successfully")
 	// we periodically reconcile the work to make sure the member cluster state is in sync with the work
 	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
@@ -219,14 +218,24 @@ func (r *ApplyWorkReconciler) applyManifests(ctx context.Context, manifests []wo
 	var appliedObj *unstructured.Unstructured
 
 	for index, manifest := range manifests {
-		result := applyResult{
-			identifier: workv1alpha1.ResourceIdentifier{Ordinal: index},
-		}
+		var result applyResult
 		gvr, rawObj, err := r.decodeManifest(manifest)
-		if err != nil {
+		switch {
+		case err != nil:
 			result.err = err
-		} else {
-			utils.AddOwnerRef(owner, rawObj)
+			result.identifier = workv1alpha1.ResourceIdentifier{
+				Ordinal: index,
+			}
+			if rawObj != nil {
+				result.identifier.Group = rawObj.GroupVersionKind().Group
+				result.identifier.Version = rawObj.GroupVersionKind().Version
+				result.identifier.Kind = rawObj.GroupVersionKind().Kind
+				result.identifier.Namespace = rawObj.GetNamespace()
+				result.identifier.Name = rawObj.GetName()
+			}
+
+		default:
+			addOwnerRef(owner, rawObj)
 			appliedObj, result.updated, result.err = r.applyUnstructured(ctx, gvr, rawObj)
 			result.identifier = buildResourceIdentifier(index, rawObj, gvr)
 			kLogObjRef := klog.ObjectRef{
@@ -259,7 +268,7 @@ func (r *ApplyWorkReconciler) decodeManifest(manifest workv1alpha1.Manifest) (sc
 
 	mapping, err := r.restMapper.RESTMapping(unstructuredObj.GroupVersionKind().GroupKind(), unstructuredObj.GroupVersionKind().Version)
 	if err != nil {
-		return schema.GroupVersionResource{}, nil, fmt.Errorf("failed to find group/version/resource from restmapping: %w", err)
+		return schema.GroupVersionResource{}, unstructuredObj, fmt.Errorf("failed to find group/version/resource from restmapping: %w", err)
 	}
 
 	return mapping.Resource, unstructuredObj, nil
@@ -271,20 +280,37 @@ func (r *ApplyWorkReconciler) applyUnstructured(ctx context.Context, gvr schema.
 		Name:      manifestObj.GetName(),
 		Namespace: manifestObj.GetNamespace(),
 	}
+	// compute the hash without taking into consider the last applied annotation
 	if err := setManifestHashAnnotation(manifestObj); err != nil {
 		return nil, false, err
 	}
 
+	// extract the common create procedure to reuse
+	var createFunc = func() (*unstructured.Unstructured, bool, error) {
+		// record the raw manifest with the hash annotation in the manifest
+		if err := setModifiedConfigurationAnnotation(manifestObj); err != nil {
+			return nil, false, err
+		}
+		actual, err := r.spokeDynamicClient.Resource(gvr).Namespace(manifestObj.GetNamespace()).Create(
+			ctx, manifestObj, metav1.CreateOptions{FieldManager: workFieldManagerName})
+		if err == nil {
+			klog.V(4).InfoS("successfully created the manifest", "gvr", gvr, "manifest", manifestRef)
+			return actual, true, nil
+		}
+		return nil, false, err
+	}
+
+	// support resources with generated name
+	if manifestObj.GetName() == "" && manifestObj.GetGenerateName() != "" {
+		klog.InfoS("create the resource with generated name regardless", "gvr", gvr, "manifest", manifestRef)
+		return createFunc()
+	}
+
+	// get the current object and create one if not found
 	curObj, err := r.spokeDynamicClient.Resource(gvr).Namespace(manifestObj.GetNamespace()).Get(ctx, manifestObj.GetName(), metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
-		actual, createErr := r.spokeDynamicClient.Resource(gvr).Namespace(manifestObj.GetNamespace()).Create(
-			ctx, manifestObj, metav1.CreateOptions{FieldManager: workFieldManagerName})
-		if createErr == nil {
-			klog.V(4).InfoS("successfully created the manfiest", "gvr", gvr, "manfiest", manifestRef)
-			return actual, true, nil
-		}
-		return nil, false, createErr
+		return createFunc()
 	case err != nil:
 		return nil, false, err
 	}
@@ -304,8 +330,9 @@ func (r *ApplyWorkReconciler) applyUnstructured(ctx context.Context, gvr schema.
 	return curObj, false, nil
 }
 
-// patchCurrentResource use server side apply to patch the current resource with the new manifest we get from the work.
-func (r *ApplyWorkReconciler) patchCurrentResource(ctx context.Context, gvr schema.GroupVersionResource, manifestObj, curObj *unstructured.Unstructured) (*unstructured.Unstructured, bool, error) {
+// patchCurrentResource uses three way merge to patch the current resource with the new manifest we get from the work.
+func (r *ApplyWorkReconciler) patchCurrentResource(ctx context.Context, gvr schema.GroupVersionResource,
+	manifestObj, curObj *unstructured.Unstructured) (*unstructured.Unstructured, bool, error) {
 	manifestRef := klog.ObjectRef{
 		Name:      manifestObj.GetName(),
 		Namespace: manifestObj.GetNamespace(),
@@ -314,21 +341,33 @@ func (r *ApplyWorkReconciler) patchCurrentResource(ctx context.Context, gvr sche
 		"new hash", manifestObj.GetAnnotations()[manifestHashAnnotation],
 		"existing hash", curObj.GetAnnotations()[manifestHashAnnotation])
 
-	newData, err := manifestObj.MarshalJSON()
-	if err != nil {
-		klog.ErrorS(err, "failed to JSON marshall manifest", "gvr", gvr, "manifest", manifestRef)
+	// we need to merge the owner reference between the current and the manifest since we support one manifest
+	// belong to multiple work so it contains the union of all the appliedWork
+	manifestObj.SetOwnerReferences(mergeOwnerReference(curObj.GetOwnerReferences(), manifestObj.GetOwnerReferences()))
+	// record the raw manifest with the hash annotation in the manifest
+	if err := setModifiedConfigurationAnnotation(manifestObj); err != nil {
 		return nil, false, err
 	}
-	// Use sever-side apply to be safe.
-	actual, patchErr := r.spokeDynamicClient.Resource(gvr).Namespace(manifestObj.GetNamespace()).
-		Patch(ctx, manifestObj.GetName(), types.ApplyPatchType, newData,
-			metav1.PatchOptions{Force: pointer.Bool(true), FieldManager: workFieldManagerName})
+	// create the three-way merge patch between the current, original and manifest similar to how kubectl apply does
+	patch, err := threeWayMergePatch(curObj, manifestObj)
+	if err != nil {
+		klog.ErrorS(err, "failed to generate the three way patch", "gvr", gvr, "manifest", manifestRef)
+		return nil, false, err
+	}
+	data, err := patch.Data(manifestObj)
+	if err != nil {
+		klog.ErrorS(err, "failed to generate the three way patch", "gvr", gvr, "manifest", manifestRef)
+		return nil, false, err
+	}
+	// Use client side apply the patch to the member cluster
+	manifestObj, patchErr := r.spokeDynamicClient.Resource(gvr).Namespace(manifestObj.GetNamespace()).
+		Patch(ctx, manifestObj.GetName(), patch.Type(), data, metav1.PatchOptions{FieldManager: workFieldManagerName})
 	if patchErr != nil {
 		klog.ErrorS(patchErr, "failed to patch the manifest", "gvr", gvr, "manifest", manifestRef)
 		return nil, false, patchErr
 	}
 	klog.V(3).InfoS("manifest patch succeeded", "gvr", gvr, "manifest", manifestRef)
-	return actual, true, nil
+	return manifestObj, true, nil
 }
 
 // generateWorkCondition constructs the work condition based on the apply result
@@ -373,11 +412,16 @@ func (r *ApplyWorkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // we have modified.
 func computeManifestHash(obj *unstructured.Unstructured) (string, error) {
 	manifest := obj.DeepCopy()
-	// remove the manifestHash Annotation just in case
+	// remove the last applied Annotation to avoid unlimited recursion
 	annotation := manifest.GetAnnotations()
 	if annotation != nil {
 		delete(annotation, manifestHashAnnotation)
-		manifest.SetAnnotations(annotation)
+		delete(annotation, lastAppliedConfigAnnotation)
+		if len(annotation) == 0 {
+			manifest.SetAnnotations(nil)
+		} else {
+			manifest.SetAnnotations(annotation)
+		}
 	}
 	// strip the live object related fields just in case
 	manifest.SetResourceVersion("")
@@ -451,17 +495,15 @@ func setManifestHashAnnotation(manifestObj *unstructured.Unstructured) error {
 
 // Builds a resource identifier for a given unstructured.Unstructured object.
 func buildResourceIdentifier(index int, object *unstructured.Unstructured, gvr schema.GroupVersionResource) workv1alpha1.ResourceIdentifier {
-	identifier := workv1alpha1.ResourceIdentifier{
-		Ordinal: index,
+	return workv1alpha1.ResourceIdentifier{
+		Ordinal:   index,
+		Group:     object.GroupVersionKind().Group,
+		Version:   object.GroupVersionKind().Version,
+		Kind:      object.GroupVersionKind().Kind,
+		Namespace: object.GetNamespace(),
+		Name:      object.GetName(),
+		Resource:  gvr.Resource,
 	}
-	identifier.Group = object.GroupVersionKind().Group
-	identifier.Version = object.GroupVersionKind().Version
-	identifier.Kind = object.GroupVersionKind().Kind
-	identifier.Namespace = object.GetNamespace()
-	identifier.Name = object.GetName()
-	identifier.Resource = gvr.Resource
-
-	return identifier
 }
 
 func buildManifestAppliedCondition(err error, updated bool, observedGeneration int64) metav1.Condition {

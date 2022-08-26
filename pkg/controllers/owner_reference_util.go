@@ -14,15 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package utils
+package controllers
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// AddOwnerRef creates or inserts the owner reference to the object
-func AddOwnerRef(ref metav1.OwnerReference, object metav1.Object) {
+// addOwnerRef creates or inserts the owner reference to the object
+func addOwnerRef(ref metav1.OwnerReference, object metav1.Object) {
 	owners := object.GetOwnerReferences()
 	if idx := indexOwnerRef(owners, ref); idx == -1 {
 		owners = append(owners, ref)
@@ -32,8 +32,8 @@ func AddOwnerRef(ref metav1.OwnerReference, object metav1.Object) {
 	object.SetOwnerReferences(owners)
 }
 
-// MergeOwnerReference merges two owner reference arrays.
-func MergeOwnerReference(owners, newOwners []metav1.OwnerReference) []metav1.OwnerReference {
+// mergeOwnerReference merges two owner reference arrays.
+func mergeOwnerReference(owners, newOwners []metav1.OwnerReference) []metav1.OwnerReference {
 	for _, newOwner := range newOwners {
 		if idx := indexOwnerRef(owners, newOwner); idx == -1 {
 			owners = append(owners, newOwner)
@@ -47,15 +47,15 @@ func MergeOwnerReference(owners, newOwners []metav1.OwnerReference) []metav1.Own
 // indexOwnerRef returns the index of the owner reference in the slice if found, or -1.
 func indexOwnerRef(ownerReferences []metav1.OwnerReference, ref metav1.OwnerReference) int {
 	for index, r := range ownerReferences {
-		if ReferSameObject(r, ref) {
+		if isReferSameObject(r, ref) {
 			return index
 		}
 	}
 	return -1
 }
 
-// ReferSameObject returns true if a and b point to the same object.
-func ReferSameObject(a, b metav1.OwnerReference) bool {
+// isReferSameObject returns true if a and b point to the same object.
+func isReferSameObject(a, b metav1.OwnerReference) bool {
 	aGV, err := schema.ParseGroupVersion(a.APIVersion)
 	if err != nil {
 		return false

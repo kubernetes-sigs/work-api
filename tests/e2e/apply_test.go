@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+
 	appv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
@@ -236,8 +237,9 @@ var WorkUpdateWithDependencyContext = func(description string, initialManifestFi
 			By("retrieving the existing work and updating it by adding new manifests")
 			Eventually(func() error {
 				createdWork, err = retrieveWork(createdWork.Namespace, createdWork.Name)
-				Expect(err).ToNot(HaveOccurred())
-
+				if err != nil {
+					return err
+				}
 				createdWork.Spec.Workload.Manifests = append(createdWork.Spec.Workload.Manifests, addedManifestDetails[0].Manifest, addedManifestDetails[1].Manifest)
 				createdWork, err = updateWork(createdWork)
 				return err
@@ -293,22 +295,23 @@ var WorkUpdateWithModifiedManifestContext = func(description string, manifestFil
 			By("retrieving the existing work and modifying the manifest")
 			Eventually(func() error {
 				createdWork, err = retrieveWork(createdWork.Namespace, createdWork.Name)
-
+				if err != nil {
+					return err
+				}
 				// Extract and modify the ConfigMap by adding a new key value pair.
 				err = json.Unmarshal(createdWork.Spec.Workload.Manifests[0].Raw, &configMap)
+				if err != nil {
+					return err
+				}
 				configMap.Data[newDataKey] = newDataValue
-
-				rawUpdatedManifest, _ := json.Marshal(configMap)
-
-				obj, _, _ := genericCodec.Decode(rawUpdatedManifest, nil, nil)
-
-				createdWork.Spec.Workload.Manifests[0].Object = obj
+				rawUpdatedManifest, err := json.Marshal(configMap)
+				if err != nil {
+					return err
+				}
 				createdWork.Spec.Workload.Manifests[0].Raw = rawUpdatedManifest
-
 				createdWork, err = updateWork(createdWork)
-
 				return err
-			}, eventuallyTimeout, eventuallyInterval).ShouldNot(HaveOccurred())
+			}, eventuallyTimeout, eventuallyInterval).Should(Succeed())
 
 			By("verifying if the manifest was reapplied")
 			Eventually(func() bool {
