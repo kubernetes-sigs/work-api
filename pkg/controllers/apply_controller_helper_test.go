@@ -20,7 +20,7 @@ import (
 func createWorkWithManifest(workNamespace string, manifest runtime.Object) *workv1alpha1.Work {
 	newWork := workv1alpha1.Work{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      utilrand.String(5),
+			Name:      "work-" + utilrand.String(5),
 			Namespace: workNamespace,
 		},
 		Spec: workv1alpha1.WorkSpec{

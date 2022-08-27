@@ -781,6 +781,9 @@ func TestReconcile(t *testing.T) {
 					MockCreate: func(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
 						return nil
 					},
+					MockStatusUpdate: func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+						return nil
+					},
 				},
 				restMapper: testMapper{},
 				recorder:   utils.NewFakeRecorder(1),
@@ -841,6 +844,9 @@ func TestReconcile(t *testing.T) {
 				spokeDynamicClient: happyDynamicClient,
 				spokeClient: &test.MockClient{
 					MockGet: getMockAppliedWork,
+					MockStatusUpdate: func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+						return nil
+					},
 				},
 				restMapper: testMapper{},
 				recorder:   utils.NewFakeRecorder(1),

@@ -26,6 +26,7 @@ import (
 	. "github.com/onsi/gomega"
 	kruisev1alpha1 "github.com/openkruise/kruise/apis/apps/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -36,8 +37,8 @@ import (
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
-const timeout = time.Second * 30
-const interval = time.Second * 1
+const timeout = time.Second * 10
+const interval = time.Millisecond * 250
 
 var _ = Describe("Work Controller", func() {
 	var workNamespace string
@@ -107,6 +108,67 @@ var _ = Describe("Work Controller", func() {
 			Expect(cmp.Diff(configMap.Labels, cm.Labels)).Should(BeEmpty())
 			Expect(cmp.Diff(configMap.Data, cm.Data)).Should(BeEmpty())
 
+		})
+
+		It("Should apply the same manifest in two work properly", func() {
+			cmName := "test-multiple-owner"
+			cmNamespace := "default"
+			cm := &corev1.ConfigMap{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "v1",
+					Kind:       "ConfigMap",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      cmName,
+					Namespace: cmNamespace,
+				},
+				Data: map[string]string{
+					"data1": "test1",
+				},
+			}
+
+			work1 := createWorkWithManifest(workNamespace, cm)
+			work2 := work1.DeepCopy()
+			work2.Name = "test-work-2"
+
+			By("create the first work")
+			err := k8sClient.Create(context.Background(), work1)
+			Expect(err).ToNot(HaveOccurred())
+
+			By("create the second work")
+			err = k8sClient.Create(context.Background(), work2)
+			Expect(err).ToNot(HaveOccurred())
+
+			waitForWorkToApply(work1.GetName(), workNamespace)
+			waitForWorkToApply(work2.GetName(), workNamespace)
+
+			By("Check applied config map")
+			var configMap corev1.ConfigMap
+			Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: cmName, Namespace: cmNamespace}, &configMap)).Should(Succeed())
+			Expect(len(configMap.Data)).Should(Equal(1))
+			Expect(configMap.Data["data1"]).Should(Equal(cm.Data["data1"]))
+			Expect(len(configMap.OwnerReferences)).Should(Equal(2))
+			Expect(configMap.OwnerReferences[0].APIVersion).Should(Equal(workv1alpha1.GroupVersion.String()))
+			Expect(configMap.OwnerReferences[0].Kind).Should(Equal(workv1alpha1.AppliedWorkKind))
+			Expect(configMap.OwnerReferences[1].APIVersion).Should(Equal(workv1alpha1.GroupVersion.String()))
+			Expect(configMap.OwnerReferences[1].Kind).Should(Equal(workv1alpha1.AppliedWorkKind))
+			// GC does not work in the testEnv
+			By("delete the second work")
+			Expect(k8sClient.Delete(context.Background(), work2)).Should(Succeed())
+			By("check that the applied work2 is deleted")
+			var appliedWork workv1alpha1.AppliedWork
+			Eventually(func() bool {
+				err := k8sClient.Get(context.Background(), types.NamespacedName{Name: work2.Name}, &appliedWork)
+				return apierrors.IsNotFound(err)
+			}, timeout, interval).Should(BeTrue())
+
+			By("delete the first work")
+			Expect(k8sClient.Delete(context.Background(), work1)).Should(Succeed())
+			By("check that the applied work1 and config map is deleted")
+			Eventually(func() bool {
+				err := k8sClient.Get(context.Background(), types.NamespacedName{Name: work2.Name}, &appliedWork)
+				return apierrors.IsNotFound(err)
+			}, timeout, interval).Should(BeTrue())
 		})
 
 		It("Should pick up the built-in manifest change correctly", func() {
