@@ -133,17 +133,12 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		klog.ErrorS(err, "failed to update work status", "work", kLogObjRef)
 		return ctrl.Result{}, err
 	}
-
-	if len(errs) != 0 {
-		klog.ErrorS(utilerrors.NewAggregate(errs), "manifest apply incomplete; the message is queued again for reconciliation",
-			"work", kLogObjRef)
-		return ctrl.Result{}, utilerrors.NewAggregate(errs)
+	if len(errs) == 0 {
+		klog.InfoS("successfully applied the work to the cluster", "work", kLogObjRef)
+		r.recorder.Event(work, v1.EventTypeNormal, "ApplyWorkSucceed", "apply the work successfully")
 	}
 
-	klog.InfoS("successfully applied the work to the cluster", "work", kLogObjRef)
-	r.recorder.Event(work, v1.EventTypeNormal, "ApplyWorkSucceed", "apply the work successfully")
-
-	// now we sync the status from work to appliedWork
+	// now we sync the status from work to appliedWork no matter if apply succeeds or not
 	newRes, staleRes, genErr := r.generateDiff(ctx, work, appliedWork)
 	if genErr != nil {
 		klog.ErrorS(err, "failed to generate the diff between work status and appliedWork status", work.Kind, kLogObjRef)
@@ -167,9 +162,15 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		klog.ErrorS(err, "failed to update appliedWork status", appliedWork.Kind, appliedWork.GetName())
 		return ctrl.Result{}, err
 	}
+	err = utilerrors.NewAggregate(errs)
+	if err != nil {
+		klog.ErrorS(err, "manifest apply incomplete; the message is queued again for reconciliation",
+			"work", kLogObjRef)
+	}
 
 	// we periodically reconcile the work to make sure the member cluster state is in sync with the work
-	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
+	// if the reconcile succeeds
+	return ctrl.Result{RequeueAfter: time.Minute * 5}, err
 }
 
 // garbageCollectAppliedWork deletes the appliedWork and all the manifests associated with it from the cluster.
