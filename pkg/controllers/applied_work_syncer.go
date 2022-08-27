@@ -93,7 +93,6 @@ func (r *ApplyWorkReconciler) generateDiff(ctx context.Context, work *workapi.Wo
 			}
 		}
 	}
-
 	return newRes, staleRes, nil
 }
 

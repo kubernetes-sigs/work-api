@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	kruisev1alpha1 "github.com/openkruise/kruise/apis/apps/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -152,7 +153,7 @@ var _ = Describe("Work Status Reconciler", func() {
 		Expect(appliedWork.Status.AppliedResources[0].Kind).Should(Equal(cm.GetObjectKind().GroupVersionKind().Kind))
 	})
 
-	It("Should delete the manifest from the member cluster after it is removed from work", func() {
+	It("Should delete the shared manifest from the member cluster after it is removed from all works", func() {
 		By("Create another work that contains configMap 2")
 		work2 := work.DeepCopy()
 		work2.Name = "work-" + utilrand.String(5)
@@ -225,4 +226,52 @@ var _ = Describe("Work Status Reconciler", func() {
 		}, timeout, interval).Should(BeTrue())
 	})
 
+	It("Should delete the manifest from the member cluster even if there is apply failure", func() {
+		By("Apply the work")
+		Expect(k8sClient.Create(context.Background(), work)).ToNot(HaveOccurred())
+
+		By("Make sure that the work is applied")
+		currentWork := waitForWorkToApply(work.Name, workNamespace)
+		var appliedWork workv1alpha1.AppliedWork
+		Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: work.Name}, &appliedWork)).Should(Succeed())
+		Expect(len(appliedWork.Status.AppliedResources)).Should(Equal(2))
+
+		By("replace configMap with a bad object from the work")
+		broadcastJob := &kruisev1alpha1.BroadcastJob{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: kruisev1alpha1.SchemeGroupVersion.String(),
+				Kind:       "BroadcastJob",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "broadcastjob-" + utilrand.String(5),
+				Namespace: workNamespace,
+			},
+			Spec: kruisev1alpha1.BroadcastJobSpec{
+				Paused: true,
+			},
+		}
+		currentWork.Spec.Workload.Manifests = []workv1alpha1.Manifest{
+			{
+				RawExtension: runtime.RawExtension{Object: broadcastJob},
+			},
+		}
+		Expect(k8sClient.Update(context.Background(), currentWork)).Should(Succeed())
+
+		By("Verify that the configMaps are removed from the cluster even if the new resouce didn't apply")
+		Eventually(func() bool {
+			var configMap corev1.ConfigMap
+			return apierrors.IsNotFound(k8sClient.Get(context.Background(), types.NamespacedName{Name: cm.Name, Namespace: resourceNamespace}, &configMap))
+		}, timeout, interval).Should(BeTrue())
+
+		Eventually(func() bool {
+			var configMap corev1.ConfigMap
+			return apierrors.IsNotFound(k8sClient.Get(context.Background(), types.NamespacedName{Name: cm2.Name, Namespace: resourceNamespace}, &configMap))
+		}, timeout, interval).Should(BeTrue())
+
+		By("Verify that the appliedWork status is correct")
+		Eventually(func() bool {
+			Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: work.Name}, &appliedWork)).Should(Succeed())
+			return len(appliedWork.Status.AppliedResources) == 0
+		}, timeout, interval).Should(BeTrue())
+	})
 })
