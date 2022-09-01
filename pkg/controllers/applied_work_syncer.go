@@ -107,6 +107,16 @@ func (r *ApplyWorkReconciler) deleteStaleManifest(ctx context.Context, staleMani
 		}
 		uObj, err := r.spokeDynamicClient.Resource(gvr).Namespace(staleManifest.Namespace).
 			Get(ctx, staleManifest.Name, metav1.GetOptions{})
+		if err != nil {
+			// It is possible that the staled manifest was already deleted but the status wasn't updated to reflect that yet.
+			if apierrors.IsNotFound(err) {
+				klog.V(2).InfoS("the staled manifest already deleted", "manifest", staleManifest, "owner", owner)
+				continue
+			}
+			klog.ErrorS(err, "failed to get the staled manifest", "manifest", staleManifest, "owner", owner)
+			errs = append(errs, err)
+			continue
+		}
 		existingOwners := uObj.GetOwnerReferences()
 		newOwners := make([]metav1.OwnerReference, 0)
 		found := false
