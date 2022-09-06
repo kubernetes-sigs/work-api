@@ -169,7 +169,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// we periodically reconcile the work to make sure the member cluster state is in sync with the work
-	// if the reconcile succeeds
+	// even if the reconciling succeeds in case the resources on the member cluster is removed/changed.
 	return ctrl.Result{RequeueAfter: time.Minute * 5}, err
 }
 

@@ -18,6 +18,9 @@ package e2e
 
 import (
 	"embed"
+	"os"
+	"testing"
+
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/gomega"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -31,13 +34,12 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"os"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
 	"sigs.k8s.io/work-api/pkg/apis/v1alpha1"
-	"testing"
 )
 
 var (
