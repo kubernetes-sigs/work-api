@@ -18,12 +18,21 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/dynamic/fake"
+	testingclient "k8s.io/client-go/testing"
 
 	"sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
@@ -32,59 +41,267 @@ import (
 // The result of the tests pass back a collection of resources that should either
 // be applied to the member cluster or removed.
 func TestCalculateNewAppliedWork(t *testing.T) {
-	identifier := generateResourceIdentifier()
-	inputWork := generateWorkObj(nil)
-	inputWorkWithResourceIdentifier := generateWorkObj(&identifier)
-	inputAppliedWork := generateAppliedWorkObj(nil)
-	inputAppliedWorkWithResourceIdentifier := generateAppliedWorkObj(&identifier)
-
+	workIdentifier := generateResourceIdentifier()
+	diffOrdinalIdentifier := workIdentifier
+	diffOrdinalIdentifier.Ordinal = rand.Int()
 	tests := map[string]struct {
-		r                ApplyWorkReconciler
-		inputWork        v1alpha1.Work
-		inputAppliedWork v1alpha1.AppliedWork
-		expectedNewRes   []v1alpha1.AppliedResourceMeta
-		expectedStaleRes []v1alpha1.AppliedResourceMeta
-		hasErr           bool
+		spokeDynamicClient dynamic.Interface
+		inputWork          v1alpha1.Work
+		inputAppliedWork   v1alpha1.AppliedWork
+		expectedNewRes     []v1alpha1.AppliedResourceMeta
+		expectedStaleRes   []v1alpha1.AppliedResourceMeta
+		hasErr             bool
 	}{
-		"AppliedWork and Work has been garbage collected; AppliedWork and Work of a resource both does not exist": {
-			r:                ApplyWorkReconciler{},
-			inputWork:        inputWork,
-			inputAppliedWork: inputAppliedWork,
-			expectedNewRes:   []v1alpha1.AppliedResourceMeta(nil),
-			expectedStaleRes: []v1alpha1.AppliedResourceMeta(nil),
+		"Test work and appliedWork in sync with no manifest applied": {
+			spokeDynamicClient: nil,
+			inputWork:          generateWorkObj(nil),
+			inputAppliedWork:   generateAppliedWorkObj(nil),
+			expectedNewRes:     []v1alpha1.AppliedResourceMeta(nil),
+			expectedStaleRes:   []v1alpha1.AppliedResourceMeta(nil),
+			hasErr:             false,
 		},
-		"AppliedWork and Work of a resource exists; there are nothing being deleted": {
-			r:                ApplyWorkReconciler{joined: true},
-			inputWork:        inputWorkWithResourceIdentifier,
-			inputAppliedWork: inputAppliedWorkWithResourceIdentifier,
+		"Test work and appliedWork in sync with one manifest applied": {
+			spokeDynamicClient: nil,
+			inputWork:          generateWorkObj(&workIdentifier),
+			inputAppliedWork:   generateAppliedWorkObj(&workIdentifier),
 			expectedNewRes: []v1alpha1.AppliedResourceMeta{
 				{
-					ResourceIdentifier: inputAppliedWorkWithResourceIdentifier.Status.AppliedResources[0].ResourceIdentifier,
-					UID:                inputAppliedWorkWithResourceIdentifier.Status.AppliedResources[0].UID,
+					ResourceIdentifier: workIdentifier,
 				},
 			},
 			expectedStaleRes: []v1alpha1.AppliedResourceMeta(nil),
+			hasErr:           false,
 		},
-		"Work resource has been deleted, but the corresponding AppliedWork remains": {
-			r:                ApplyWorkReconciler{joined: true},
-			inputWork:        inputWork,
-			inputAppliedWork: inputAppliedWorkWithResourceIdentifier,
-			expectedNewRes:   []v1alpha1.AppliedResourceMeta(nil),
-			expectedStaleRes: []v1alpha1.AppliedResourceMeta{
+		"Test work and appliedWork has the same resource but with different ordinal": {
+			spokeDynamicClient: nil,
+			inputWork:          generateWorkObj(&workIdentifier),
+			inputAppliedWork:   generateAppliedWorkObj(&diffOrdinalIdentifier),
+			expectedNewRes: []v1alpha1.AppliedResourceMeta{
 				{
-					ResourceIdentifier: inputAppliedWorkWithResourceIdentifier.Status.AppliedResources[0].ResourceIdentifier,
-					UID:                inputAppliedWorkWithResourceIdentifier.Status.AppliedResources[0].UID,
+					ResourceIdentifier: workIdentifier,
 				},
 			},
+			expectedStaleRes: []v1alpha1.AppliedResourceMeta(nil),
+			hasErr:           false,
+		},
+		"Test work is missing one manifest": {
+			spokeDynamicClient: nil,
+			inputWork:          generateWorkObj(nil),
+			inputAppliedWork:   generateAppliedWorkObj(&workIdentifier),
+			expectedNewRes:     []v1alpha1.AppliedResourceMeta(nil),
+			expectedStaleRes: []v1alpha1.AppliedResourceMeta{
+				{
+					ResourceIdentifier: workIdentifier,
+				},
+			},
+			hasErr: false,
+		},
+		"Test work has more manifest but not applied": {
+			spokeDynamicClient: nil,
+			inputWork: func() v1alpha1.Work {
+				return v1alpha1.Work{
+					Status: v1alpha1.WorkStatus{
+						ManifestConditions: []v1alpha1.ManifestCondition{
+							{
+								Identifier: workIdentifier,
+								Conditions: []metav1.Condition{
+									{
+										Type:   ConditionTypeApplied,
+										Status: metav1.ConditionFalse,
+									},
+								},
+							},
+						},
+					},
+				}
+			}(),
+			inputAppliedWork: generateAppliedWorkObj(nil),
+			expectedNewRes:   []v1alpha1.AppliedResourceMeta(nil),
+			expectedStaleRes: []v1alpha1.AppliedResourceMeta(nil),
+			hasErr:           false,
+		},
+		"Test work is adding one manifest, happy case": {
+			spokeDynamicClient: func() *fake.FakeDynamicClient {
+				uObj := unstructured.Unstructured{}
+				uObj.SetUID(types.UID(rand.String(10)))
+				dynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
+				dynamicClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+					return true, uObj.DeepCopy(), nil
+				})
+				return dynamicClient
+			}(),
+			inputWork:        generateWorkObj(&workIdentifier),
+			inputAppliedWork: generateAppliedWorkObj(nil),
+			expectedNewRes: []v1alpha1.AppliedResourceMeta{
+				{
+					ResourceIdentifier: workIdentifier,
+				},
+			},
+			expectedStaleRes: []v1alpha1.AppliedResourceMeta(nil),
+			hasErr:           false,
+		},
+		"Test work is adding one manifest but not found on the member cluster": {
+			spokeDynamicClient: func() *fake.FakeDynamicClient {
+				dynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
+				dynamicClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+					return true, nil, &apierrors.StatusError{
+						ErrStatus: metav1.Status{
+							Status: metav1.StatusFailure,
+							Reason: metav1.StatusReasonNotFound,
+						}}
+				})
+				return dynamicClient
+			}(),
+			inputWork:        generateWorkObj(&workIdentifier),
+			inputAppliedWork: generateAppliedWorkObj(nil),
+			expectedNewRes:   []v1alpha1.AppliedResourceMeta(nil),
+			expectedStaleRes: []v1alpha1.AppliedResourceMeta(nil),
+			hasErr:           false,
+		},
+		"Test work is adding one manifest but failed to get it on the member cluster": {
+			spokeDynamicClient: func() *fake.FakeDynamicClient {
+				dynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
+				dynamicClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+					return true, nil, fmt.Errorf("get failed")
+				})
+				return dynamicClient
+			}(),
+			inputWork:        generateWorkObj(&workIdentifier),
+			inputAppliedWork: generateAppliedWorkObj(nil),
+			expectedNewRes:   nil,
+			expectedStaleRes: nil,
+			hasErr:           true,
 		},
 	}
 	for testName, tt := range tests {
 		t.Run(testName, func(t *testing.T) {
-			newRes, staleRes, err := tt.r.generateDiff(context.Background(), &tt.inputWork, &tt.inputAppliedWork)
-			assert.Equalf(t, tt.expectedNewRes, newRes, "Testcase %s: NewRes is different from what it should be.", testName)
-			assert.Equalf(t, tt.expectedStaleRes, staleRes, "Testcase %s: StaleRes is different from what it should be.", testName)
+			r := &ApplyWorkReconciler{
+				spokeDynamicClient: tt.spokeDynamicClient,
+			}
+			newRes, staleRes, err := r.generateDiff(context.Background(), &tt.inputWork, &tt.inputAppliedWork)
+			if len(tt.expectedNewRes) != len(newRes) {
+				t.Errorf("Testcase %s: get newRes contains different number of elements than the expected newRes.", testName)
+			}
+			for i := 0; i < len(newRes); i++ {
+				diff := cmp.Diff(tt.expectedNewRes[i].ResourceIdentifier, newRes[i].ResourceIdentifier)
+				if len(diff) != 0 {
+					t.Errorf("Testcase %s: get newRes is different from the expected newRes, diff = %s", testName, diff)
+				}
+			}
+			if len(tt.expectedStaleRes) != len(staleRes) {
+				t.Errorf("Testcase %s: get staleRes contains different number of elements than the expected staleRes.", testName)
+			}
+			for i := 0; i < len(staleRes); i++ {
+				diff := cmp.Diff(tt.expectedStaleRes[i].ResourceIdentifier, staleRes[i].ResourceIdentifier)
+				if len(diff) != 0 {
+					t.Errorf("Testcase %s: get staleRes is different from the expected staleRes, diff = %s", testName, diff)
+				}
+			}
 			if tt.hasErr {
 				assert.Truef(t, err != nil, "Testcase %s: Should get an err.", testName)
+			}
+		})
+	}
+}
+
+func TestDeleteStaleManifest(t *testing.T) {
+	tests := map[string]struct {
+		spokeDynamicClient dynamic.Interface
+		staleManifests     []v1alpha1.AppliedResourceMeta
+		owner              metav1.OwnerReference
+		wantErr            error
+	}{
+		"test staled manifests  already deleted": {
+			spokeDynamicClient: func() *fake.FakeDynamicClient {
+				dynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
+				dynamicClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+					return true, nil, &apierrors.StatusError{
+						ErrStatus: metav1.Status{
+							Status: metav1.StatusFailure,
+							Reason: metav1.StatusReasonNotFound,
+						}}
+				})
+				return dynamicClient
+			}(),
+			staleManifests: []v1alpha1.AppliedResourceMeta{
+				{
+					ResourceIdentifier: v1alpha1.ResourceIdentifier{
+						Name: "does not matter 1",
+					},
+				},
+				{
+					ResourceIdentifier: v1alpha1.ResourceIdentifier{
+						Name: "does not matter 2",
+					},
+				},
+			},
+			owner: metav1.OwnerReference{
+				APIVersion: "does not matter",
+			},
+			wantErr: nil,
+		},
+		"test failed to get staled manifest": {
+			spokeDynamicClient: func() *fake.FakeDynamicClient {
+				dynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
+				dynamicClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+					return true, nil, fmt.Errorf("get failed")
+				})
+				return dynamicClient
+			}(),
+			staleManifests: []v1alpha1.AppliedResourceMeta{
+				{
+					ResourceIdentifier: v1alpha1.ResourceIdentifier{
+						Name: "does not matter",
+					},
+				},
+			},
+			owner: metav1.OwnerReference{
+				APIVersion: "does not matter",
+			},
+			wantErr: utilerrors.NewAggregate([]error{fmt.Errorf("get failed")}),
+		},
+		"test not remove a staled manifest that work does not own": {
+			spokeDynamicClient: func() *fake.FakeDynamicClient {
+				uObj := unstructured.Unstructured{}
+				uObj.SetOwnerReferences([]metav1.OwnerReference{
+					{
+						APIVersion: "not owned by work",
+					},
+				})
+				dynamicClient := fake.NewSimpleDynamicClient(runtime.NewScheme())
+				dynamicClient.PrependReactor("get", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+					return true, uObj.DeepCopy(), nil
+				})
+				dynamicClient.PrependReactor("delete", "*", func(action testingclient.Action) (handled bool, ret runtime.Object, err error) {
+					return true, nil, fmt.Errorf("should not call")
+				})
+				return dynamicClient
+			}(),
+			staleManifests: []v1alpha1.AppliedResourceMeta{
+				{
+					ResourceIdentifier: v1alpha1.ResourceIdentifier{
+						Name: "does not matter",
+					},
+				},
+			},
+			owner: metav1.OwnerReference{
+				APIVersion: "does not match",
+			},
+			wantErr: nil,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := &ApplyWorkReconciler{
+				spokeDynamicClient: tt.spokeDynamicClient,
+			}
+			gotErr := r.deleteStaleManifest(context.Background(), tt.staleManifests, tt.owner)
+			if tt.wantErr == nil {
+				if gotErr != nil {
+					t.Errorf("test case `%s` didn't return the exepected error,  want no error, got error = %+v ", name, gotErr)
+				}
+			} else if gotErr == nil || gotErr.Error() != tt.wantErr.Error() {
+				t.Errorf("test case `%s` didn't return the exepected error, want error = %+v, got error = %+v", name, tt.wantErr, gotErr)
 			}
 		})
 	}

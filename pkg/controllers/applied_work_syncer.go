@@ -37,10 +37,12 @@ import (
 func (r *ApplyWorkReconciler) generateDiff(ctx context.Context, work *workapi.Work, appliedWork *workapi.AppliedWork) ([]workapi.AppliedResourceMeta, []workapi.AppliedResourceMeta, error) {
 	var staleRes, newRes []workapi.AppliedResourceMeta
 	// for every resource applied in cluster, check if it's still in the work's manifest condition
+	// we keep the applied resource in the appliedWork status even if it is not applied successfully
+	// to make sure that it is safe to delete the resource from the member cluster.
 	for _, resourceMeta := range appliedWork.Status.AppliedResources {
 		resStillExist := false
 		for _, manifestCond := range work.Status.ManifestConditions {
-			if resourceMeta.ResourceIdentifier == manifestCond.Identifier {
+			if isSameResourceIdentifier(resourceMeta.ResourceIdentifier, manifestCond.Identifier) {
 				resStillExist = true
 				break
 			}
@@ -62,17 +64,21 @@ func (r *ApplyWorkReconciler) generateDiff(ctx context.Context, work *workapi.Wo
 		// we only add the applied one to the appliedWork status
 		if ac.Status == metav1.ConditionTrue {
 			resRecorded := false
-			// we keep the existing resourceMeta since it has the UID
+			// we update the identifier
+			// TODO: this UID may not be the current one if the resource is deleted and recreated
 			for _, resourceMeta := range appliedWork.Status.AppliedResources {
-				if resourceMeta.ResourceIdentifier == manifestCond.Identifier {
+				if isSameResourceIdentifier(resourceMeta.ResourceIdentifier, manifestCond.Identifier) {
 					resRecorded = true
-					newRes = append(newRes, resourceMeta)
+					newRes = append(newRes, workapi.AppliedResourceMeta{
+						ResourceIdentifier: manifestCond.Identifier,
+						UID:                resourceMeta.UID,
+					})
 					break
 				}
 			}
 			if !resRecorded {
-				klog.V(5).InfoS("discovered a new resource",
-					"parent Work", work.GetName(), "discovered resource", manifestCond.Identifier)
+				klog.V(5).InfoS("discovered a new manifest resource",
+					"parent Work", work.GetName(), "manifest", manifestCond.Identifier)
 				obj, err := r.spokeDynamicClient.Resource(schema.GroupVersionResource{
 					Group:    manifestCond.Identifier.Group,
 					Version:  manifestCond.Identifier.Version,
@@ -80,10 +86,10 @@ func (r *ApplyWorkReconciler) generateDiff(ctx context.Context, work *workapi.Wo
 				}).Namespace(manifestCond.Identifier.Namespace).Get(ctx, manifestCond.Identifier.Name, metav1.GetOptions{})
 				switch {
 				case apierrors.IsNotFound(err):
-					klog.V(4).InfoS("the manifest resource is deleted", "manifest", manifestCond.Identifier)
+					klog.V(4).InfoS("the new manifest resource is already deleted", "parent Work", work.GetName(), "manifest", manifestCond.Identifier)
 					continue
 				case err != nil:
-					klog.ErrorS(err, "failed to retrieve the manifest", "manifest", manifestCond.Identifier)
+					klog.ErrorS(err, "failed to retrieve the manifest", "parent Work", work.GetName(), "manifest", manifestCond.Identifier)
 					return nil, nil, err
 				}
 				newRes = append(newRes, workapi.AppliedResourceMeta{
@@ -107,6 +113,16 @@ func (r *ApplyWorkReconciler) deleteStaleManifest(ctx context.Context, staleMani
 		}
 		uObj, err := r.spokeDynamicClient.Resource(gvr).Namespace(staleManifest.Namespace).
 			Get(ctx, staleManifest.Name, metav1.GetOptions{})
+		if err != nil {
+			// It is possible that the staled manifest was already deleted but the status wasn't updated to reflect that yet.
+			if apierrors.IsNotFound(err) {
+				klog.V(2).InfoS("the staled manifest already deleted", "manifest", staleManifest, "owner", owner)
+				continue
+			}
+			klog.ErrorS(err, "failed to get the staled manifest", "manifest", staleManifest, "owner", owner)
+			errs = append(errs, err)
+			continue
+		}
 		existingOwners := uObj.GetOwnerReferences()
 		newOwners := make([]metav1.OwnerReference, 0)
 		found := false
@@ -118,12 +134,12 @@ func (r *ApplyWorkReconciler) deleteStaleManifest(ctx context.Context, staleMani
 			}
 		}
 		if !found {
-			klog.ErrorS(err, "the stale manifest is not owned by this work, skip", "manifest", staleManifest, "owner", owner)
+			klog.V(4).InfoS("the stale manifest is not owned by this work, skip", "manifest", staleManifest, "owner", owner)
 			continue
 		}
 		if len(newOwners) == 0 {
 			klog.V(2).InfoS("delete the staled manifest", "manifest", staleManifest, "owner", owner)
-			err := r.spokeDynamicClient.Resource(gvr).Namespace(staleManifest.Namespace).
+			err = r.spokeDynamicClient.Resource(gvr).Namespace(staleManifest.Namespace).
 				Delete(ctx, staleManifest.Name, metav1.DeleteOptions{})
 			if err != nil && !apierrors.IsNotFound(err) {
 				klog.ErrorS(err, "failed to delete the staled manifest", "manifest", staleManifest, "owner", owner)
@@ -132,7 +148,7 @@ func (r *ApplyWorkReconciler) deleteStaleManifest(ctx context.Context, staleMani
 		} else {
 			klog.V(2).InfoS("remove the owner reference from the staled manifest", "manifest", staleManifest, "owner", owner)
 			uObj.SetOwnerReferences(newOwners)
-			_, err := r.spokeDynamicClient.Resource(gvr).Namespace(staleManifest.Namespace).Update(ctx, uObj, metav1.UpdateOptions{FieldManager: workFieldManagerName})
+			_, err = r.spokeDynamicClient.Resource(gvr).Namespace(staleManifest.Namespace).Update(ctx, uObj, metav1.UpdateOptions{FieldManager: workFieldManagerName})
 			if err != nil {
 				klog.ErrorS(err, "failed to remove the owner reference from manifest", "manifest", staleManifest, "owner", owner)
 				errs = append(errs, err)
@@ -140,4 +156,10 @@ func (r *ApplyWorkReconciler) deleteStaleManifest(ctx context.Context, staleMani
 		}
 	}
 	return utilerrors.NewAggregate(errs)
+}
+
+// isSameResourceIdentifier returns true if a and b identifies the same object.
+func isSameResourceIdentifier(a, b workapi.ResourceIdentifier) bool {
+	// compare GVKNN but ignore the Ordinal and Resource
+	return a.Group == b.Group && a.Version == b.Version && a.Kind == b.Kind && a.Namespace == b.Namespace && a.Name == b.Name
 }
