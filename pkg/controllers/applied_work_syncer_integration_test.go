@@ -18,6 +18,7 @@ package controllers
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -273,5 +274,49 @@ var _ = Describe("Work Status Reconciler", func() {
 			Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: work.Name}, &appliedWork)).Should(Succeed())
 			return len(appliedWork.Status.AppliedResources) == 0
 		}, timeout, interval).Should(BeTrue())
+	})
+
+	It("Test the order of the manifest in the work alone does not trigger any operation in the member cluster", func() {
+		By("Apply the work")
+		Expect(k8sClient.Create(context.Background(), work)).ToNot(HaveOccurred())
+
+		By("Make sure that the work is applied")
+		currentWork := waitForWorkToApply(work.Name, workNamespace)
+		var appliedWork workv1alpha1.AppliedWork
+		Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: work.Name}, &appliedWork)).Should(Succeed())
+		Expect(len(appliedWork.Status.AppliedResources)).Should(Equal(2))
+
+		By("Make sure that the manifests exist on the member cluster")
+		Eventually(func() bool {
+			var configMap corev1.ConfigMap
+			return k8sClient.Get(context.Background(), types.NamespacedName{Name: cm2.Name, Namespace: resourceNamespace}, &configMap) == nil &&
+				k8sClient.Get(context.Background(), types.NamespacedName{Name: cm.Name, Namespace: resourceNamespace}, &configMap) == nil
+		}, timeout, interval).Should(BeTrue())
+
+		By("Change the order of the two configs in the work")
+		currentWork.Spec.Workload.Manifests = []workv1alpha1.Manifest{
+			{
+				RawExtension: runtime.RawExtension{Object: cm2},
+			},
+			{
+				RawExtension: runtime.RawExtension{Object: cm},
+			},
+		}
+		Expect(k8sClient.Update(context.Background(), currentWork)).Should(Succeed())
+
+		By("Verify that nothing is removed from the cluster")
+		Consistently(func() bool {
+			var configMap corev1.ConfigMap
+			return k8sClient.Get(context.Background(), types.NamespacedName{Name: cm2.Name, Namespace: resourceNamespace}, &configMap) == nil &&
+				k8sClient.Get(context.Background(), types.NamespacedName{Name: cm.Name, Namespace: resourceNamespace}, &configMap) == nil
+		}, timeout, time.Millisecond*25).Should(BeTrue())
+
+		By("Verify that the appliedWork status is correct")
+		Eventually(func() bool {
+			Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: work.Name}, &appliedWork)).Should(Succeed())
+			return len(appliedWork.Status.AppliedResources) == 2
+		}, timeout, interval).Should(BeTrue())
+		Expect(appliedWork.Status.AppliedResources[0].Name).Should(Equal(cm2.GetName()))
+		Expect(appliedWork.Status.AppliedResources[1].Name).Should(Equal(cm.GetName()))
 	})
 })
