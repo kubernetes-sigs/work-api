@@ -48,7 +48,7 @@ func (r *ApplyWorkReconciler) generateDiff(ctx context.Context, work *workapi.Wo
 			}
 		}
 		if !resStillExist {
-			klog.V(5).InfoS("find an orphaned resource in the member cluster",
+			klog.V(2).InfoS("find an orphaned resource in the member cluster",
 				"parent resource", work.GetName(), "orphaned resource", resourceMeta.ResourceIdentifier)
 			staleRes = append(staleRes, resourceMeta)
 		}
@@ -77,7 +77,7 @@ func (r *ApplyWorkReconciler) generateDiff(ctx context.Context, work *workapi.Wo
 				}
 			}
 			if !resRecorded {
-				klog.V(5).InfoS("discovered a new manifest resource",
+				klog.V(2).InfoS("discovered a new manifest resource",
 					"parent Work", work.GetName(), "manifest", manifestCond.Identifier)
 				obj, err := r.spokeDynamicClient.Resource(schema.GroupVersionResource{
 					Group:    manifestCond.Identifier.Group,
@@ -86,7 +86,7 @@ func (r *ApplyWorkReconciler) generateDiff(ctx context.Context, work *workapi.Wo
 				}).Namespace(manifestCond.Identifier.Namespace).Get(ctx, manifestCond.Identifier.Name, metav1.GetOptions{})
 				switch {
 				case apierrors.IsNotFound(err):
-					klog.V(4).InfoS("the new manifest resource is already deleted", "parent Work", work.GetName(), "manifest", manifestCond.Identifier)
+					klog.V(2).InfoS("the new manifest resource is already deleted", "parent Work", work.GetName(), "manifest", manifestCond.Identifier)
 					continue
 				case err != nil:
 					klog.ErrorS(err, "failed to retrieve the manifest", "parent Work", work.GetName(), "manifest", manifestCond.Identifier)
@@ -134,7 +134,7 @@ func (r *ApplyWorkReconciler) deleteStaleManifest(ctx context.Context, staleMani
 			}
 		}
 		if !found {
-			klog.V(4).InfoS("the stale manifest is not owned by this work, skip", "manifest", staleManifest, "owner", owner)
+			klog.V(2).InfoS("the stale manifest is not owned by this work, skip", "manifest", staleManifest, "owner", owner)
 			continue
 		}
 		if len(newOwners) == 0 {

@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -33,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	utilrand "k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/utils/pointer"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
@@ -64,7 +66,7 @@ var _ = Describe("Work Controller", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	Context("Test work propagation", func() {
+	Context("Test single work propagation", func() {
 		It("Should have a configmap deployed correctly", func() {
 			cmName := "testcm"
 			cmNamespace := "default"
@@ -225,7 +227,7 @@ var _ = Describe("Work Controller", func() {
 			rawCM, err := json.Marshal(cm)
 			Expect(err).Should(Succeed())
 			resultWork.Spec.Workload.Manifests[0].Raw = rawCM
-			Expect(k8sClient.Update(context.Background(), resultWork)).Should(Succeed())
+			Expect(k8sClient.Update(ctx, resultWork)).Should(Succeed())
 
 			By("wait for the change of the work to be applied")
 			waitForWorkToApply(work.GetName(), work.GetNamespace())
@@ -516,6 +518,135 @@ var _ = Describe("Work Controller", func() {
 				Name:      broadcastJob.GetName(),
 			}
 			Expect(cmp.Diff(resultWork.Status.ManifestConditions[0].Identifier, expectedResourceId)).Should(BeEmpty())
+		})
+	})
+
+	Context("Test multiple work propagation", func() {
+		var works []*workv1alpha1.Work
+
+		AfterEach(func() {
+			for _, staleWork := range works {
+				err := k8sClient.Delete(context.Background(), staleWork)
+				Expect(err).ToNot(HaveOccurred())
+			}
+		})
+
+		It("Test join and leave work correctly", func() {
+			By("create the works")
+			var configMap corev1.ConfigMap
+			cmNamespace := "default"
+			var cmNames []string
+			numWork := 10
+			data := map[string]string{
+				"test-key-1": "test-value-1",
+				"test-key-2": "test-value-2",
+				"test-key-3": "test-value-3",
+			}
+
+			for i := 0; i < numWork; i++ {
+				cmName := "testcm-" + utilrand.String(10)
+				cmNames = append(cmNames, cmName)
+				cm = &corev1.ConfigMap{
+					TypeMeta: metav1.TypeMeta{
+						APIVersion: "v1",
+						Kind:       "ConfigMap",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      cmName,
+						Namespace: cmNamespace,
+					},
+					Data: data,
+				}
+				// make sure we can call join as many as possible
+				Expect(workController.Join(ctx)).Should(Succeed())
+				work = createWorkWithManifest(workNamespace, cm)
+				err := k8sClient.Create(ctx, work)
+				Expect(err).ToNot(HaveOccurred())
+				By(fmt.Sprintf("created the work = %s", work.GetName()))
+				works = append(works, work)
+			}
+
+			By("make sure the works are handled")
+			for i := 0; i < numWork; i++ {
+				waitForWorkToBeHandled(works[i].GetName(), works[i].GetNamespace())
+			}
+
+			By("mark the work controller as leave")
+			Expect(workController.Leave(ctx)).Should(Succeed())
+
+			By("make sure the manifests have no finalizer and its status match the member cluster")
+			newData := map[string]string{
+				"test-key-1":     "test-value-1",
+				"test-key-2":     "test-value-2",
+				"test-key-3":     "test-value-3",
+				"new-test-key-1": "test-value-4",
+				"new-test-key-2": "test-value-5",
+			}
+			for i := 0; i < numWork; i++ {
+				var resultWork workv1alpha1.Work
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Name: works[i].GetName(), Namespace: workNamespace}, &resultWork)).Should(Succeed())
+				Expect(controllerutil.ContainsFinalizer(work, workFinalizer)).Should(BeFalse())
+				applyCond := meta.FindStatusCondition(resultWork.Status.Conditions, ConditionTypeApplied)
+				if applyCond != nil && applyCond.Status == metav1.ConditionTrue && applyCond.ObservedGeneration == resultWork.Generation {
+					By("the work is applied, check if the applied config map is still there")
+					Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cmNames[i], Namespace: cmNamespace}, &configMap)).Should(Succeed())
+					Expect(cmp.Diff(configMap.Data, data)).Should(BeEmpty())
+				} else {
+					By("the work is not applied, verify that the applied config map is not there")
+					err := k8sClient.Get(ctx, types.NamespacedName{Name: cmNames[i], Namespace: cmNamespace}, &configMap)
+					Expect(apierrors.IsNotFound(err)).Should(BeTrue())
+				}
+				// make sure that leave can be called as many times as possible
+				Expect(workController.Leave(ctx)).Should(Succeed())
+				By(fmt.Sprintf("change the work = %s", work.GetName()))
+				cm = &corev1.ConfigMap{
+					TypeMeta: metav1.TypeMeta{
+						APIVersion: "v1",
+						Kind:       "ConfigMap",
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      cmNames[i],
+						Namespace: cmNamespace,
+					},
+					Data: newData,
+				}
+				rawCM, err := json.Marshal(cm)
+				Expect(err).Should(Succeed())
+				resultWork.Spec.Workload.Manifests[0].Raw = rawCM
+				Expect(k8sClient.Update(ctx, &resultWork)).Should(Succeed())
+			}
+
+			By("make sure the update in the work is not picked up")
+			Consistently(func() bool {
+				for i := 0; i < numWork; i++ {
+					By(fmt.Sprintf("updated the work = %s", works[i].GetName()))
+					var resultWork workv1alpha1.Work
+					err := k8sClient.Get(context.Background(), types.NamespacedName{Name: works[i].GetName(), Namespace: workNamespace}, &resultWork)
+					Expect(err).Should(Succeed())
+					Expect(controllerutil.ContainsFinalizer(&resultWork, workFinalizer)).Should(BeFalse())
+					applyCond := meta.FindStatusCondition(resultWork.Status.Conditions, ConditionTypeApplied)
+					if applyCond != nil && applyCond.Status == metav1.ConditionTrue && applyCond.ObservedGeneration == resultWork.Generation {
+						return false
+					}
+					By("check if the config map is not changed")
+					Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cmNames[i], Namespace: cmNamespace}, &configMap)).Should(Succeed())
+					Expect(cmp.Diff(configMap.Data, data)).Should(BeEmpty())
+				}
+				return true
+			}, timeout, interval).Should(BeTrue())
+
+			By("enable the work controller again")
+			Expect(workController.Join(ctx)).Should(Succeed())
+
+			By("make sure the work change get picked up")
+			for i := 0; i < numWork; i++ {
+				resultWork := waitForWorkToApply(works[i].GetName(), works[i].GetNamespace())
+				Expect(len(resultWork.Status.ManifestConditions)).Should(Equal(1))
+				Expect(meta.IsStatusConditionTrue(resultWork.Status.ManifestConditions[0].Conditions, ConditionTypeApplied)).Should(BeTrue())
+				By("the work is applied, check if the applied config map is updated")
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cmNames[i], Namespace: cmNamespace}, &configMap)).Should(Succeed())
+				Expect(cmp.Diff(configMap.Data, newData)).Should(BeEmpty())
+			}
 		})
 	})
 })

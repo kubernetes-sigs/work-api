@@ -47,8 +47,6 @@ import (
 
 const (
 	workFieldManagerName = "work-api-agent"
-
-	AnnotationLastAppliedManifest = "fleet.azure.com/last-applied-manifest"
 )
 
 // ApplyWorkReconciler reconciles a Work object
@@ -59,10 +57,12 @@ type ApplyWorkReconciler struct {
 	restMapper         meta.RESTMapper
 	recorder           record.EventRecorder
 	concurrency        int
+	workNameSpace      string
 	joined             bool
 }
 
-func NewApplyWorkReconciler(hubClient client.Client, spokeDynamicClient dynamic.Interface, spokeClient client.Client, restMapper meta.RESTMapper, recorder record.EventRecorder, concurrency int, joined bool) *ApplyWorkReconciler {
+func NewApplyWorkReconciler(hubClient client.Client, spokeDynamicClient dynamic.Interface, spokeClient client.Client,
+	restMapper meta.RESTMapper, recorder record.EventRecorder, concurrency int, workNameSpace string) *ApplyWorkReconciler {
 	return &ApplyWorkReconciler{
 		client:             hubClient,
 		spokeDynamicClient: spokeDynamicClient,
@@ -70,7 +70,7 @@ func NewApplyWorkReconciler(hubClient client.Client, spokeDynamicClient dynamic.
 		restMapper:         restMapper,
 		recorder:           recorder,
 		concurrency:        concurrency,
-		joined:             joined,
+		workNameSpace:      workNameSpace,
 	}
 }
 
@@ -85,7 +85,7 @@ type applyResult struct {
 // Reconcile implement the control loop logic for Work object.
 func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	if !r.joined {
-		klog.V(3).InfoS("work controller is not started yet, requeue the request", "work", req.NamespacedName)
+		klog.V(2).InfoS("work controller is not started yet, requeue the request", "work", req.NamespacedName)
 		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 	}
 	klog.InfoS("work apply controller reconcile loop triggered.", "work", req.NamespacedName)
@@ -95,7 +95,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	err := r.client.Get(ctx, req.NamespacedName, work)
 	switch {
 	case apierrors.IsNotFound(err):
-		klog.V(4).InfoS("the work resource is deleted", "work", req.NamespacedName)
+		klog.V(2).InfoS("the work resource is deleted", "work", req.NamespacedName)
 		return ctrl.Result{}, nil
 	case err != nil:
 		klog.ErrorS(err, "failed to retrieve the work", "work", req.NamespacedName)
@@ -150,7 +150,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		// we can't proceed to update the applied
 		return ctrl.Result{}, err
 	} else if len(staleRes) > 0 {
-		klog.V(3).InfoS("successfully garbage-collected all stale manifests", work.Kind, kLogObjRef, "number of GCed res", len(staleRes))
+		klog.V(2).InfoS("successfully garbage-collected all stale manifests", work.Kind, kLogObjRef, "number of GCed res", len(staleRes))
 		for _, res := range staleRes {
 			klog.V(5).InfoS("successfully garbage-collected a stale manifest", work.Kind, kLogObjRef, "res", res)
 		}
@@ -187,7 +187,7 @@ func (r *ApplyWorkReconciler) garbageCollectAppliedWork(ctx context.Context, wor
 	err := r.spokeClient.Delete(ctx, &appliedWork, &client.DeleteOptions{PropagationPolicy: &deletePolicy})
 	switch {
 	case apierrors.IsNotFound(err):
-		klog.V(4).InfoS("the appliedWork is already deleted", "appliedWork", work.Name)
+		klog.V(2).InfoS("the appliedWork is already deleted", "appliedWork", work.Name)
 	case err != nil:
 		klog.ErrorS(err, "failed to delete the appliedWork", "appliedWork", work.Name)
 		return ctrl.Result{}, err
@@ -273,9 +273,9 @@ func (r *ApplyWorkReconciler) applyManifests(ctx context.Context, manifests []wo
 			if result.err == nil {
 				result.generation = appliedObj.GetGeneration()
 				if result.updated {
-					klog.V(4).InfoS("manifest upsert succeeded", "gvr", gvr, "manifest", kLogObjRef, "new ObservedGeneration", result.generation)
+					klog.V(2).InfoS("manifest upsert succeeded", "gvr", gvr, "manifest", kLogObjRef, "new ObservedGeneration", result.generation)
 				} else {
-					klog.V(5).InfoS("manifest upsert unwarranted", "gvr", gvr, "manifest", kLogObjRef)
+					klog.V(2).InfoS("manifest upsert unwarranted", "gvr", gvr, "manifest", kLogObjRef)
 				}
 			} else {
 				klog.ErrorS(result.err, "manifest upsert failed", "gvr", gvr, "manifest", kLogObjRef)
@@ -322,7 +322,7 @@ func (r *ApplyWorkReconciler) applyUnstructured(ctx context.Context, gvr schema.
 		actual, err := r.spokeDynamicClient.Resource(gvr).Namespace(manifestObj.GetNamespace()).Create(
 			ctx, manifestObj, metav1.CreateOptions{FieldManager: workFieldManagerName})
 		if err == nil {
-			klog.V(4).InfoS("successfully created the manifest", "gvr", gvr, "manifest", manifestRef)
+			klog.V(2).InfoS("successfully created the manifest", "gvr", gvr, "manifest", manifestRef)
 			return actual, true, nil
 		}
 		return nil, false, err
@@ -394,7 +394,7 @@ func (r *ApplyWorkReconciler) patchCurrentResource(ctx context.Context, gvr sche
 		klog.ErrorS(patchErr, "failed to patch the manifest", "gvr", gvr, "manifest", manifestRef)
 		return nil, false, patchErr
 	}
-	klog.V(3).InfoS("manifest patch succeeded", "gvr", gvr, "manifest", manifestRef)
+	klog.V(2).InfoS("manifest patch succeeded", "gvr", gvr, "manifest", manifestRef)
 	return manifestObj, true, nil
 }
 
@@ -424,6 +424,47 @@ func (r *ApplyWorkReconciler) generateWorkCondition(results []applyResult, work 
 	workCond := generateWorkAppliedCondition(manifestConditions, work.Generation)
 	work.Status.Conditions = []metav1.Condition{workCond}
 	return errs
+}
+
+// Join starts to reconcile
+func (r *ApplyWorkReconciler) Join(ctx context.Context) error {
+	if !r.joined {
+		klog.InfoS("mark the apply work reconciler joined")
+	}
+	r.joined = true
+	return nil
+}
+
+// Leave start
+func (r *ApplyWorkReconciler) Leave(ctx context.Context) error {
+	var works workv1alpha1.WorkList
+	if r.joined {
+		klog.InfoS("mark the apply work reconciler left")
+	}
+	r.joined = false
+	// list all the work object we created in the member cluster namespace
+	listOpts := []client.ListOption{
+		client.InNamespace(r.workNameSpace),
+	}
+	if err := r.client.List(ctx, &works, listOpts...); err != nil {
+		klog.ErrorS(err, "failed to list all the work object", "clusterNS", r.workNameSpace)
+		return client.IgnoreNotFound(err)
+	}
+	// we leave the resources on the member cluster for now
+	for _, work := range works.Items {
+		staleWork := work.DeepCopy()
+		if controllerutil.ContainsFinalizer(staleWork, workFinalizer) {
+			controllerutil.RemoveFinalizer(staleWork, workFinalizer)
+			if updateErr := r.client.Update(ctx, staleWork, &client.UpdateOptions{}); updateErr != nil {
+				klog.ErrorS(updateErr, "failed to remove the work finalizer from the work",
+					"clusterNS", r.workNameSpace, "work", klog.KObj(staleWork))
+				return updateErr
+			}
+		}
+	}
+	klog.V(2).InfoS("successfully removed all the work finalizers in the cluster namespace",
+		"clusterNS", r.workNameSpace, "number of work", len(works.Items))
+	return nil
 }
 
 // SetupWithManager wires up the controller.

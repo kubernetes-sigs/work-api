@@ -32,6 +32,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
@@ -41,11 +42,12 @@ import (
 var (
 	cfg *rest.Config
 	// TODO: Seperate k8sClient into hub and spoke
-	k8sClient client.Client
-	testEnv   *envtest.Environment
-	setupLog  = ctrl.Log.WithName("test")
-	ctx       context.Context
-	cancel    context.CancelFunc
+	k8sClient      client.Client
+	testEnv        *envtest.Environment
+	workController *ApplyWorkReconciler
+	setupLog       = ctrl.Log.WithName("test")
+	ctx            context.Context
+	cancel         context.CancelFunc
 )
 
 func TestAPIs(t *testing.T) {
@@ -73,18 +75,23 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	err = kruisev1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
-
+	opts := ctrl.Options{
+		Scheme: scheme.Scheme,
+	}
 	k8sClient, err = client.New(cfg, client.Options{
 		Scheme: scheme.Scheme,
 	})
 	Expect(err).NotTo(HaveOccurred())
 
+	By("start controllers")
+	var hubMgr manager.Manager
+	if hubMgr, workController, err = CreateControllers(ctx, cfg, cfg, setupLog, opts); err != nil {
+		setupLog.Error(err, "problem creating controllers")
+		os.Exit(1)
+	}
 	go func() {
-		opts := ctrl.Options{
-			Scheme: scheme.Scheme,
-		}
 		ctx, cancel = context.WithCancel(context.Background())
-		if err := Start(ctx, cfg, cfg, setupLog, opts); err != nil {
+		if err = hubMgr.Start(ctx); err != nil {
 			setupLog.Error(err, "problem running controllers")
 			os.Exit(1)
 		}

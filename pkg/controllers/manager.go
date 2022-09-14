@@ -23,10 +23,10 @@ import (
 	"github.com/go-logr/logr"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
-	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
 const (
@@ -43,8 +43,8 @@ const (
 	maxWorkConcurrency = 5
 )
 
-// Start the controllers with the supplied config
-func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Logger, opts ctrl.Options) error {
+// CreateControllers create the controllers with the supplied config
+func CreateControllers(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Logger, opts ctrl.Options) (manager.Manager, *ApplyWorkReconciler, error) {
 	hubMgr, err := ctrl.NewManager(hubCfg, opts)
 	if err != nil {
 		setupLog.Error(err, "unable to create hub manager")
@@ -71,24 +71,25 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 		os.Exit(1)
 	}
 
-	if err = NewApplyWorkReconciler(
+	workController := NewApplyWorkReconciler(
 		hubMgr.GetClient(),
 		spokeDynamicClient,
 		spokeClient,
 		restMapper,
 		hubMgr.GetEventRecorderFor("work_controller"),
 		maxWorkConcurrency,
-		true,
-	).SetupWithManager(hubMgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Work")
-		return err
+		opts.Namespace,
+	)
+
+	if err = workController.SetupWithManager(hubMgr); err != nil {
+		setupLog.Error(err, "unable to create the controller", "controller", "Work")
+		return nil, nil, err
 	}
 
-	klog.Info("starting hub manager")
-	defer klog.Info("shutting down hub manager")
-	if err := hubMgr.Start(ctx); err != nil {
-		setupLog.Error(err, "problem running hub manager")
+	if err = workController.Join(ctx); err != nil {
+		setupLog.Error(err, "unable to mark the controller joined", "controller", "Work")
+		return nil, nil, err
 	}
 
-	return nil
+	return hubMgr, workController, nil
 }

@@ -102,9 +102,17 @@ func main() {
 		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 	}
 
-	if err := controllers.Start(ctrl.SetupSignalHandler(), hubConfig, ctrl.GetConfigOrDie(), setupLog, opts); err != nil {
+	ctx := ctrl.SetupSignalHandler()
+	hubMgr, _, err := controllers.CreateControllers(ctx, hubConfig, ctrl.GetConfigOrDie(), setupLog, opts)
+	if err != nil {
 		setupLog.Error(err, "problem running controllers")
 		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+	}
+
+	klog.Info("starting hub manager")
+	defer klog.Info("shutting down hub manager")
+	if err := hubMgr.Start(ctx); err != nil {
+		setupLog.Error(err, "problem running hub manager")
 	}
 }
 
