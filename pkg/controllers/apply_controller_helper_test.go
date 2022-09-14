@@ -12,12 +12,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilrand "k8s.io/apimachinery/pkg/util/rand"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
 // createWorkWithManifest creates a work given a manifest
 func createWorkWithManifest(workNamespace string, manifest runtime.Object) *workv1alpha1.Work {
+	manifestCopy := manifest.DeepCopyObject()
 	newWork := workv1alpha1.Work{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "work-" + utilrand.String(5),
@@ -27,7 +29,7 @@ func createWorkWithManifest(workNamespace string, manifest runtime.Object) *work
 			Workload: workv1alpha1.WorkloadTemplate{
 				Manifests: []workv1alpha1.Manifest{
 					{
-						RawExtension: runtime.RawExtension{Object: manifest},
+						RawExtension: runtime.RawExtension{Object: manifestCopy},
 					},
 				},
 			},
@@ -75,6 +77,19 @@ func waitForWorkToApply(workName, workNS string) *workv1alpha1.Work {
 			}
 		}
 		return true
+	}, timeout, interval).Should(BeTrue())
+	return &resultWork
+}
+
+// waitForWorkToBeHandled waits for a work to have a finalizer
+func waitForWorkToBeHandled(workName, workNS string) *workv1alpha1.Work {
+	var resultWork workv1alpha1.Work
+	Eventually(func() bool {
+		err := k8sClient.Get(context.Background(), types.NamespacedName{Name: workName, Namespace: workNS}, &resultWork)
+		if err != nil {
+			return false
+		}
+		return controllerutil.ContainsFinalizer(&resultWork, workFinalizer)
 	}, timeout, interval).Should(BeTrue())
 	return &resultWork
 }
