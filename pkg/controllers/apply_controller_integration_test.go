@@ -568,10 +568,7 @@ var _ = Describe("Work Controller", func() {
 
 			By("make sure the works are handled")
 			for i := 0; i < numWork; i++ {
-				resultWork := waitForWorkToBeHandled(works[i].GetName(), works[i].GetNamespace())
-				Expect(len(resultWork.Status.ManifestConditions)).Should(Equal(1))
-				Expect(meta.IsStatusConditionTrue(resultWork.Status.Conditions, ConditionTypeApplied)).Should(BeTrue())
-				Expect(meta.IsStatusConditionTrue(resultWork.Status.ManifestConditions[0].Conditions, ConditionTypeApplied)).Should(BeTrue())
+				waitForWorkToBeHandled(works[i].GetName(), works[i].GetNamespace())
 			}
 
 			By("mark the work controller as leave")
