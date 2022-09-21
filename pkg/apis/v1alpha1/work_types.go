@@ -21,6 +21,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+const WorkKind = "Work"
+const WorkResource = "works"
+
 // WorkSpec defines the desired state of Work
 type WorkSpec struct {
 	// Workload represents the manifest workload to be deployed on spoke cluster
@@ -62,7 +65,7 @@ type WorkStatus struct {
 type ResourceIdentifier struct {
 	// Ordinal represents an index in manifests list, so the condition can still be linked
 	// to a manifest even thougth manifest cannot be parsed successfully.
-	Ordinal int `json:"ordinal,omitempty"`
+	Ordinal int `json:"ordinal"`
 
 	// Group is the group of the resource.
 	Group string `json:"group,omitempty"`
