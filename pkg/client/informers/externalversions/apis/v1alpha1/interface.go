@@ -24,6 +24,8 @@ import (
 
 // Interface provides access to all the informers in this group version.
 type Interface interface {
+	// AppliedWorks returns a AppliedWorkInformer.
+	AppliedWorks() AppliedWorkInformer
 	// Works returns a WorkInformer.
 	Works() WorkInformer
 }
@@ -37,6 +39,11 @@ type version struct {
 // New returns a new Interface.
 func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakListOptions internalinterfaces.TweakListOptionsFunc) Interface {
 	return &version{factory: f, namespace: namespace, tweakListOptions: tweakListOptions}
+}
+
+// AppliedWorks returns a AppliedWorkInformer.
+func (v *version) AppliedWorks() AppliedWorkInformer {
+	return &appliedWorkInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
 
 // Works returns a WorkInformer.
