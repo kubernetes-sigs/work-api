@@ -28,6 +28,10 @@ type FakeMulticlusterV1alpha1 struct {
 	*testing.Fake
 }
 
+func (c *FakeMulticlusterV1alpha1) AppliedWorks() v1alpha1.AppliedWorkInterface {
+	return &FakeAppliedWorks{c}
+}
+
 func (c *FakeMulticlusterV1alpha1) Works(namespace string) v1alpha1.WorkInterface {
 	return &FakeWorks{c, namespace}
 }

@@ -163,6 +163,8 @@ spec:
                       identifier:
                         description: resourceId represents a identity of a resource linking to manifests in spec.
                         type: object
+                        required:
+                          - ordinal
                         properties:
                           group:
                             description: Group is the group of the resource.
