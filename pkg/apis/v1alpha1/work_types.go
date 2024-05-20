@@ -101,6 +101,7 @@ type ManifestCondition struct {
 
 // +genclient
 // +kubebuilder:object:root=true
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +kubebuilder:subresource:status
 
 // Work is the Schema for the works API
@@ -116,6 +117,7 @@ type Work struct {
 }
 
 // +kubebuilder:object:root=true
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // WorkList contains a list of Work
 type WorkList struct {

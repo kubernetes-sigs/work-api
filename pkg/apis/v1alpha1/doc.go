@@ -16,6 +16,7 @@ limitations under the License.
 
 // Package v1alpha1 contains API schema definitions for the Multi-Cluster
 // Services v1alpha1 API group.
+// +k8s:deepcopy-gen=package,register
 // +kubebuilder:object:generate=true
 // +groupName=multicluster.x-k8s.io
 package v1alpha1
