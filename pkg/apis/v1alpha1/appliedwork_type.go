@@ -65,6 +65,7 @@ type AppliedResourceMeta struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,categories={fleet}
 // +kubebuilder:object:root=true
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // AppliedWork represents an applied work on managed cluster that is placed
 // on a managed cluster. An appliedwork links to a work on a hub recording resources
@@ -89,6 +90,7 @@ type AppliedWork struct {
 }
 
 // +kubebuilder:object:root=true
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // AppliedWorkList contains a list of AppliedWork
 type AppliedWorkList struct {
