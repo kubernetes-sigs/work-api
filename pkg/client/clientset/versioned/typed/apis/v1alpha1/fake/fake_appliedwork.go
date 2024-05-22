@@ -110,7 +110,7 @@ func (c *FakeAppliedWorks) UpdateStatus(ctx context.Context, appliedWork *v1alph
 // Delete takes name of the appliedWork and deletes it. Returns an error if one occurs.
 func (c *FakeAppliedWorks) Delete(ctx context.Context, name string, opts v1.DeleteOptions) error {
 	_, err := c.Fake.
-		Invokes(testing.NewRootDeleteAction(appliedworksResource, name), &v1alpha1.AppliedWork{})
+		Invokes(testing.NewRootDeleteActionWithOptions(appliedworksResource, name, opts), &v1alpha1.AppliedWork{})
 	return err
 }
 
