@@ -23,7 +23,7 @@ This guide will cover:
 - Verify all the contents inside the `work` has been delivered in the `spoke` cluster.
 
 ### Prerequisites
-- [Go](https://golang.org) version v1.16+
+- [Go](https://golang.org) version v1.20+
 - [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl) version v1.19+
 - [kind](https://kind.sigs.k8s.io) version v0.9.0+
 
