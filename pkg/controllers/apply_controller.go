@@ -97,7 +97,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	workCond := generateWorkAppliedStatusCondition(manifestConditions, work.Generation)
 	meta.SetStatusCondition(&work.Status.Conditions, workCond)
 
-	err = r.client.Status().Update(ctx, work, &client.UpdateOptions{})
+	err = r.client.Status().Update(ctx, work)
 	if err != nil {
 		errs = append(errs, err)
 	}
