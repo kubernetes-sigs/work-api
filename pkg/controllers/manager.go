@@ -45,8 +45,12 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
-
-	restMapper, err := apiutil.NewDynamicRESTMapper(spokeCfg, apiutil.WithLazyDiscovery)
+	httpClient, err := rest.HTTPClientFor(spokeCfg)
+	if err != nil {
+		setupLog.Error(err, "unable to start manager")
+		os.Exit(1)
+	}
+	restMapper, err := apiutil.NewDynamicRESTMapper(spokeCfg, httpClient)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
