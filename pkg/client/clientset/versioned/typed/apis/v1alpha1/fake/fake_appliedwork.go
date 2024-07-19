@@ -23,7 +23,6 @@ import (
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
-	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	types "k8s.io/apimachinery/pkg/types"
 	watch "k8s.io/apimachinery/pkg/watch"
 	testing "k8s.io/client-go/testing"
@@ -35,9 +34,9 @@ type FakeAppliedWorks struct {
 	Fake *FakeMulticlusterV1alpha1
 }
 
-var appliedworksResource = schema.GroupVersionResource{Group: "multicluster.x-k8s.io", Version: "v1alpha1", Resource: "appliedworks"}
+var appliedworksResource = v1alpha1.SchemeGroupVersion.WithResource("appliedworks")
 
-var appliedworksKind = schema.GroupVersionKind{Group: "multicluster.x-k8s.io", Version: "v1alpha1", Kind: "AppliedWork"}
+var appliedworksKind = v1alpha1.SchemeGroupVersion.WithKind("AppliedWork")
 
 // Get takes name of the appliedWork, and returns the corresponding appliedWork object, and an error if there is any.
 func (c *FakeAppliedWorks) Get(ctx context.Context, name string, options v1.GetOptions) (result *v1alpha1.AppliedWork, err error) {
