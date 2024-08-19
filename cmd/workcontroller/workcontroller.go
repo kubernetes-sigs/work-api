@@ -19,6 +19,8 @@ package main
 import (
 	"flag"
 	"os"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -26,6 +28,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 	"sigs.k8s.io/work-api/pkg/controllers"
 )
@@ -54,11 +57,11 @@ func main() {
 		"Namespace to watch for work.")
 	flag.Parse()
 	opts := ctrl.Options{
-		Scheme:             scheme,
-		MetricsBindAddress: metricsAddr,
-		LeaderElection:     enableLeaderElection,
-		Port:               9443,
-		Namespace:          workNamespace,
+		Scheme:         scheme,
+		Metrics:        metricsserver.Options{BindAddress: metricsAddr},
+		LeaderElection: enableLeaderElection,
+		WebhookServer:  webhook.NewServer(webhook.Options{Port: 9443}),
+		Cache:          cache.Options{DefaultNamespaces: map[string]cache.Config{workNamespace: {}}},
 	}
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
