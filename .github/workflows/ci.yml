@@ -13,7 +13,7 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-go@v3
+      - uses: actions/setup-go@v5
       - uses: actions/checkout@v3
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
@@ -34,7 +34,7 @@ jobs:
           fetch-depth: 1
           path: go/src/sigs.k8s.io/work-api
       - name: install Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v5
         with:
           go-version: 1.21.x
       - name: verify
@@ -52,7 +52,7 @@ jobs:
           fetch-depth: 1
           path: go/src/sigs.k8s.io/work-api
       - name: install Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v5
         with:
           go-version: 1.21.x
       - name: make test
@@ -69,7 +69,7 @@ jobs:
           fetch-depth: 1
           path: go/src/sigs.k8s.io/work-api
       - name: install Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v5
         with:
           go-version: 1.21.x
       - name: images
