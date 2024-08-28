@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-go@v5
+        with:
+          go-version: 1.22.6
       - uses: actions/checkout@v4
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
@@ -36,7 +38,7 @@ jobs:
       - name: install Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.21.x
+          go-version: 1.22.6
       - name: verify
         run: hack/verify-all.sh -v
         env:
@@ -54,7 +56,7 @@ jobs:
       - name: install Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.21.x
+          go-version: 1.22.6
       - name: make test
         run: make test
         env:
@@ -71,7 +73,7 @@ jobs:
       - name: install Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.21.x
+          go-version: 1.22.6
       - name: images
         run: make docker-build
         env:

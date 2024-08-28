@@ -28,51 +28,44 @@ gobin="${GOBIN:-$(go env GOPATH)/bin}"
 
 OUTPUT_PKG=sigs.k8s.io/work-api/pkg/client
 FQ_APIS=sigs.k8s.io/work-api/pkg/apis/v1alpha1
-APIS_PKG=sigs.k8s.io/work-api
-CLIENTSET_NAME=versioned
 CLIENTSET_PKG_NAME=clientset
-
-if [[ "${VERIFY_CODEGEN:-}" == "true" ]]; then
-  echo "Running in verification mode"
-  VERIFY_FLAG="--verify-only"
-fi
-COMMON_FLAGS="${VERIFY_FLAG:-} --go-header-file ${SCRIPT_ROOT}/hack/boilerplate.go.txt"
 
 # code generator tools rely on the environment variable GOPATH and generates files to $GOPATH/src/.
 export GOPATH=$(go env GOPATH | awk -F ':' '{print $1}')
 
 echo "Generating deepcopy funcs"
 "${gobin}/deepcopy-gen" \
-  --input-dirs=sigs.k8s.io/work-api/pkg/apis/v1alpha1 \
-  --output-package=sigs.k8s.io/work-api/pkg/apis/v1alpha1 \
-  --output-file-base=zz_generated.deepcopy \
-  ${COMMON_FLAGS}
+  --go-header-file ${SCRIPT_ROOT}/hack/boilerplate.go.txt \
+  --output-file=zz_generated.deepcopy.go \
+  sigs.k8s.io/work-api/pkg/apis/v1alpha1
 
 echo "Generating register at ${FQ_APIS}"
 "${gobin}/register-gen" \
-  --input-dirs=sigs.k8s.io/work-api/pkg/apis/v1alpha1 \
-  --output-package=sigs.k8s.io/work-api/pkg/apis/v1alpha1 \
-  --output-file-base=zz_generated.register \
-  ${COMMON_FLAGS}
+  --go-header-file ${SCRIPT_ROOT}/hack/boilerplate.go.txt \
+  --output-file=zz_generated.register.go \
+  sigs.k8s.io/work-api/pkg/apis/v1alpha1
 
 echo "Generating clientset at ${OUTPUT_PKG}/${CLIENTSET_PKG_NAME}"
 "${gobin}/client-gen" \
+  --go-header-file ${SCRIPT_ROOT}/hack/boilerplate.go.txt \
   --input-base="" \
   --input=sigs.k8s.io/work-api/pkg/apis/v1alpha1 \
-  --output-package=sigs.k8s.io/work-api/pkg/client/clientset \
-  --clientset-name=versioned \
-  ${COMMON_FLAGS}
+  --output-pkg=sigs.k8s.io/work-api/pkg/client/clientset \
+  --output-dir=pkg/client/clientset \
+  --clientset-name=versioned
 
 echo "Generating listers at ${OUTPUT_PKG}/listers"
 "${gobin}/lister-gen" \
-  --input-dirs=sigs.k8s.io/work-api/pkg/apis/v1alpha1 \
-  --output-package=sigs.k8s.io/work-api/pkg/client/listers \
-  ${COMMON_FLAGS}
+  --go-header-file ${SCRIPT_ROOT}/hack/boilerplate.go.txt \
+  --output-pkg=sigs.k8s.io/work-api/pkg/client/listers \
+  --output-dir=pkg/client/listers \
+  sigs.k8s.io/work-api/pkg/apis/v1alpha1
 
 echo "Generating informers at ${OUTPUT_PKG}/informers"
 "${gobin}/informer-gen" \
-  --input-dirs=sigs.k8s.io/work-api/pkg/apis/v1alpha1 \
+  --go-header-file ${SCRIPT_ROOT}/hack/boilerplate.go.txt \
   --versioned-clientset-package=sigs.k8s.io/work-api/pkg/client/clientset/versioned \
   --listers-package=sigs.k8s.io/work-api/pkg/client/listers \
-  --output-package=sigs.k8s.io/work-api/pkg/client/informers \
-  ${COMMON_FLAGS}
+  --output-pkg=sigs.k8s.io/work-api/pkg/client/informers \
+  --output-dir=pkg/client/informers \
+  sigs.k8s.io/work-api/pkg/apis/v1alpha1

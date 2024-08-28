@@ -64,7 +64,7 @@ var _ = BeforeSuite(func(done Done) {
 	Expect(err).ToNot(HaveOccurred())
 	Expect(cfg).ToNot(BeNil())
 
-	err = workv1alpha1.AddToScheme(scheme.Scheme)
+	err = workv1alpha1.Install(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	opts := ctrl.Options{
