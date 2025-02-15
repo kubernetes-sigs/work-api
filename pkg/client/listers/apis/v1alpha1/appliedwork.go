@@ -19,8 +19,8 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/listers"
 	"k8s.io/client-go/tools/cache"
 	v1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
@@ -39,30 +39,10 @@ type AppliedWorkLister interface {
 
 // appliedWorkLister implements the AppliedWorkLister interface.
 type appliedWorkLister struct {
-	indexer cache.Indexer
+	listers.ResourceIndexer[*v1alpha1.AppliedWork]
 }
 
 // NewAppliedWorkLister returns a new AppliedWorkLister.
 func NewAppliedWorkLister(indexer cache.Indexer) AppliedWorkLister {
-	return &appliedWorkLister{indexer: indexer}
-}
-
-// List lists all AppliedWorks in the indexer.
-func (s *appliedWorkLister) List(selector labels.Selector) (ret []*v1alpha1.AppliedWork, err error) {
-	err = cache.ListAll(s.indexer, selector, func(m interface{}) {
-		ret = append(ret, m.(*v1alpha1.AppliedWork))
-	})
-	return ret, err
-}
-
-// Get retrieves the AppliedWork from the index for a given name.
-func (s *appliedWorkLister) Get(name string) (*v1alpha1.AppliedWork, error) {
-	obj, exists, err := s.indexer.GetByKey(name)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, errors.NewNotFound(v1alpha1.Resource("appliedwork"), name)
-	}
-	return obj.(*v1alpha1.AppliedWork), nil
+	return &appliedWorkLister{listers.New[*v1alpha1.AppliedWork](indexer, v1alpha1.Resource("appliedwork"))}
 }
