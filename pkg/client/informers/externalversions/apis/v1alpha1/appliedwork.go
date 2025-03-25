@@ -19,24 +19,24 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"context"
+	context "context"
 	time "time"
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	watch "k8s.io/apimachinery/pkg/watch"
 	cache "k8s.io/client-go/tools/cache"
-	apisv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
+	pkgapisv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 	versioned "sigs.k8s.io/work-api/pkg/client/clientset/versioned"
 	internalinterfaces "sigs.k8s.io/work-api/pkg/client/informers/externalversions/internalinterfaces"
-	v1alpha1 "sigs.k8s.io/work-api/pkg/client/listers/apis/v1alpha1"
+	apisv1alpha1 "sigs.k8s.io/work-api/pkg/client/listers/apis/v1alpha1"
 )
 
 // AppliedWorkInformer provides access to a shared informer and lister for
 // AppliedWorks.
 type AppliedWorkInformer interface {
 	Informer() cache.SharedIndexInformer
-	Lister() v1alpha1.AppliedWorkLister
+	Lister() apisv1alpha1.AppliedWorkLister
 }
 
 type appliedWorkInformer struct {
@@ -70,7 +70,7 @@ func NewFilteredAppliedWorkInformer(client versioned.Interface, resyncPeriod tim
 				return client.MulticlusterV1alpha1().AppliedWorks().Watch(context.TODO(), options)
 			},
 		},
-		&apisv1alpha1.AppliedWork{},
+		&pkgapisv1alpha1.AppliedWork{},
 		resyncPeriod,
 		indexers,
 	)
@@ -81,9 +81,9 @@ func (f *appliedWorkInformer) defaultInformer(client versioned.Interface, resync
 }
 
 func (f *appliedWorkInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&apisv1alpha1.AppliedWork{}, f.defaultInformer)
+	return f.factory.InformerFor(&pkgapisv1alpha1.AppliedWork{}, f.defaultInformer)
 }
 
-func (f *appliedWorkInformer) Lister() v1alpha1.AppliedWorkLister {
-	return v1alpha1.NewAppliedWorkLister(f.Informer().GetIndexer())
+func (f *appliedWorkInformer) Lister() apisv1alpha1.AppliedWorkLister {
+	return apisv1alpha1.NewAppliedWorkLister(f.Informer().GetIndexer())
 }

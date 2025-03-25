@@ -19,10 +19,10 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/listers"
-	"k8s.io/client-go/tools/cache"
-	v1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
+	labels "k8s.io/apimachinery/pkg/labels"
+	listers "k8s.io/client-go/listers"
+	cache "k8s.io/client-go/tools/cache"
+	apisv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
 // AppliedWorkLister helps list AppliedWorks.
@@ -30,19 +30,19 @@ import (
 type AppliedWorkLister interface {
 	// List lists all AppliedWorks in the indexer.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*v1alpha1.AppliedWork, err error)
+	List(selector labels.Selector) (ret []*apisv1alpha1.AppliedWork, err error)
 	// Get retrieves the AppliedWork from the index for a given name.
 	// Objects returned here must be treated as read-only.
-	Get(name string) (*v1alpha1.AppliedWork, error)
+	Get(name string) (*apisv1alpha1.AppliedWork, error)
 	AppliedWorkListerExpansion
 }
 
 // appliedWorkLister implements the AppliedWorkLister interface.
 type appliedWorkLister struct {
-	listers.ResourceIndexer[*v1alpha1.AppliedWork]
+	listers.ResourceIndexer[*apisv1alpha1.AppliedWork]
 }
 
 // NewAppliedWorkLister returns a new AppliedWorkLister.
 func NewAppliedWorkLister(indexer cache.Indexer) AppliedWorkLister {
-	return &appliedWorkLister{listers.New[*v1alpha1.AppliedWork](indexer, v1alpha1.Resource("appliedwork"))}
+	return &appliedWorkLister{listers.New[*apisv1alpha1.AppliedWork](indexer, apisv1alpha1.Resource("appliedwork"))}
 }

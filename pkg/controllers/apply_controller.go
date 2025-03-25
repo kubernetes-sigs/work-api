@@ -138,11 +138,11 @@ func (r *ApplyWorkReconciler) decodeUnstructured(manifest workv1alpha1.Manifest)
 	unstructuredObj := &unstructured.Unstructured{}
 	err := unstructuredObj.UnmarshalJSON(manifest.Raw)
 	if err != nil {
-		return schema.GroupVersionResource{}, nil, fmt.Errorf("Failed to decode object: %w", err)
+		return schema.GroupVersionResource{}, nil, fmt.Errorf("failed to decode object: %w", err)
 	}
 	mapping, err := r.restMapper.RESTMapping(unstructuredObj.GroupVersionKind().GroupKind(), unstructuredObj.GroupVersionKind().Version)
 	if err != nil {
-		return schema.GroupVersionResource{}, nil, fmt.Errorf("Failed to find gvr from restmapping: %w", err)
+		return schema.GroupVersionResource{}, nil, fmt.Errorf("failed to find gvr from restmapping: %w", err)
 	}
 
 	return mapping.Resource, unstructuredObj, nil
