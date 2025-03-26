@@ -19,24 +19,24 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"context"
+	context "context"
 	time "time"
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	watch "k8s.io/apimachinery/pkg/watch"
 	cache "k8s.io/client-go/tools/cache"
-	apisv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
+	pkgapisv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 	versioned "sigs.k8s.io/work-api/pkg/client/clientset/versioned"
 	internalinterfaces "sigs.k8s.io/work-api/pkg/client/informers/externalversions/internalinterfaces"
-	v1alpha1 "sigs.k8s.io/work-api/pkg/client/listers/apis/v1alpha1"
+	apisv1alpha1 "sigs.k8s.io/work-api/pkg/client/listers/apis/v1alpha1"
 )
 
 // WorkInformer provides access to a shared informer and lister for
 // Works.
 type WorkInformer interface {
 	Informer() cache.SharedIndexInformer
-	Lister() v1alpha1.WorkLister
+	Lister() apisv1alpha1.WorkLister
 }
 
 type workInformer struct {
@@ -71,7 +71,7 @@ func NewFilteredWorkInformer(client versioned.Interface, namespace string, resyn
 				return client.MulticlusterV1alpha1().Works(namespace).Watch(context.TODO(), options)
 			},
 		},
-		&apisv1alpha1.Work{},
+		&pkgapisv1alpha1.Work{},
 		resyncPeriod,
 		indexers,
 	)
@@ -82,9 +82,9 @@ func (f *workInformer) defaultInformer(client versioned.Interface, resyncPeriod 
 }
 
 func (f *workInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&apisv1alpha1.Work{}, f.defaultInformer)
+	return f.factory.InformerFor(&pkgapisv1alpha1.Work{}, f.defaultInformer)
 }
 
-func (f *workInformer) Lister() v1alpha1.WorkLister {
-	return v1alpha1.NewWorkLister(f.Informer().GetIndexer())
+func (f *workInformer) Lister() apisv1alpha1.WorkLister {
+	return apisv1alpha1.NewWorkLister(f.Informer().GetIndexer())
 }

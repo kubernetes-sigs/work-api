@@ -19,120 +19,34 @@ limitations under the License.
 package fake
 
 import (
-	"context"
-
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	labels "k8s.io/apimachinery/pkg/labels"
-	types "k8s.io/apimachinery/pkg/types"
-	watch "k8s.io/apimachinery/pkg/watch"
-	testing "k8s.io/client-go/testing"
+	gentype "k8s.io/client-go/gentype"
 	v1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
+	apisv1alpha1 "sigs.k8s.io/work-api/pkg/client/clientset/versioned/typed/apis/v1alpha1"
 )
 
-// FakeAppliedWorks implements AppliedWorkInterface
-type FakeAppliedWorks struct {
+// fakeAppliedWorks implements AppliedWorkInterface
+type fakeAppliedWorks struct {
+	*gentype.FakeClientWithList[*v1alpha1.AppliedWork, *v1alpha1.AppliedWorkList]
 	Fake *FakeMulticlusterV1alpha1
 }
 
-var appliedworksResource = v1alpha1.SchemeGroupVersion.WithResource("appliedworks")
-
-var appliedworksKind = v1alpha1.SchemeGroupVersion.WithKind("AppliedWork")
-
-// Get takes name of the appliedWork, and returns the corresponding appliedWork object, and an error if there is any.
-func (c *FakeAppliedWorks) Get(ctx context.Context, name string, options v1.GetOptions) (result *v1alpha1.AppliedWork, err error) {
-	emptyResult := &v1alpha1.AppliedWork{}
-	obj, err := c.Fake.
-		Invokes(testing.NewRootGetActionWithOptions(appliedworksResource, name, options), emptyResult)
-	if obj == nil {
-		return emptyResult, err
+func newFakeAppliedWorks(fake *FakeMulticlusterV1alpha1) apisv1alpha1.AppliedWorkInterface {
+	return &fakeAppliedWorks{
+		gentype.NewFakeClientWithList[*v1alpha1.AppliedWork, *v1alpha1.AppliedWorkList](
+			fake.Fake,
+			"",
+			v1alpha1.SchemeGroupVersion.WithResource("appliedworks"),
+			v1alpha1.SchemeGroupVersion.WithKind("AppliedWork"),
+			func() *v1alpha1.AppliedWork { return &v1alpha1.AppliedWork{} },
+			func() *v1alpha1.AppliedWorkList { return &v1alpha1.AppliedWorkList{} },
+			func(dst, src *v1alpha1.AppliedWorkList) { dst.ListMeta = src.ListMeta },
+			func(list *v1alpha1.AppliedWorkList) []*v1alpha1.AppliedWork {
+				return gentype.ToPointerSlice(list.Items)
+			},
+			func(list *v1alpha1.AppliedWorkList, items []*v1alpha1.AppliedWork) {
+				list.Items = gentype.FromPointerSlice(items)
+			},
+		),
+		fake,
 	}
-	return obj.(*v1alpha1.AppliedWork), err
-}
-
-// List takes label and field selectors, and returns the list of AppliedWorks that match those selectors.
-func (c *FakeAppliedWorks) List(ctx context.Context, opts v1.ListOptions) (result *v1alpha1.AppliedWorkList, err error) {
-	emptyResult := &v1alpha1.AppliedWorkList{}
-	obj, err := c.Fake.
-		Invokes(testing.NewRootListActionWithOptions(appliedworksResource, appliedworksKind, opts), emptyResult)
-	if obj == nil {
-		return emptyResult, err
-	}
-
-	label, _, _ := testing.ExtractFromListOptions(opts)
-	if label == nil {
-		label = labels.Everything()
-	}
-	list := &v1alpha1.AppliedWorkList{ListMeta: obj.(*v1alpha1.AppliedWorkList).ListMeta}
-	for _, item := range obj.(*v1alpha1.AppliedWorkList).Items {
-		if label.Matches(labels.Set(item.Labels)) {
-			list.Items = append(list.Items, item)
-		}
-	}
-	return list, err
-}
-
-// Watch returns a watch.Interface that watches the requested appliedWorks.
-func (c *FakeAppliedWorks) Watch(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
-	return c.Fake.
-		InvokesWatch(testing.NewRootWatchActionWithOptions(appliedworksResource, opts))
-}
-
-// Create takes the representation of a appliedWork and creates it.  Returns the server's representation of the appliedWork, and an error, if there is any.
-func (c *FakeAppliedWorks) Create(ctx context.Context, appliedWork *v1alpha1.AppliedWork, opts v1.CreateOptions) (result *v1alpha1.AppliedWork, err error) {
-	emptyResult := &v1alpha1.AppliedWork{}
-	obj, err := c.Fake.
-		Invokes(testing.NewRootCreateActionWithOptions(appliedworksResource, appliedWork, opts), emptyResult)
-	if obj == nil {
-		return emptyResult, err
-	}
-	return obj.(*v1alpha1.AppliedWork), err
-}
-
-// Update takes the representation of a appliedWork and updates it. Returns the server's representation of the appliedWork, and an error, if there is any.
-func (c *FakeAppliedWorks) Update(ctx context.Context, appliedWork *v1alpha1.AppliedWork, opts v1.UpdateOptions) (result *v1alpha1.AppliedWork, err error) {
-	emptyResult := &v1alpha1.AppliedWork{}
-	obj, err := c.Fake.
-		Invokes(testing.NewRootUpdateActionWithOptions(appliedworksResource, appliedWork, opts), emptyResult)
-	if obj == nil {
-		return emptyResult, err
-	}
-	return obj.(*v1alpha1.AppliedWork), err
-}
-
-// UpdateStatus was generated because the type contains a Status member.
-// Add a +genclient:noStatus comment above the type to avoid generating UpdateStatus().
-func (c *FakeAppliedWorks) UpdateStatus(ctx context.Context, appliedWork *v1alpha1.AppliedWork, opts v1.UpdateOptions) (result *v1alpha1.AppliedWork, err error) {
-	emptyResult := &v1alpha1.AppliedWork{}
-	obj, err := c.Fake.
-		Invokes(testing.NewRootUpdateSubresourceActionWithOptions(appliedworksResource, "status", appliedWork, opts), emptyResult)
-	if obj == nil {
-		return emptyResult, err
-	}
-	return obj.(*v1alpha1.AppliedWork), err
-}
-
-// Delete takes name of the appliedWork and deletes it. Returns an error if one occurs.
-func (c *FakeAppliedWorks) Delete(ctx context.Context, name string, opts v1.DeleteOptions) error {
-	_, err := c.Fake.
-		Invokes(testing.NewRootDeleteActionWithOptions(appliedworksResource, name, opts), &v1alpha1.AppliedWork{})
-	return err
-}
-
-// DeleteCollection deletes a collection of objects.
-func (c *FakeAppliedWorks) DeleteCollection(ctx context.Context, opts v1.DeleteOptions, listOpts v1.ListOptions) error {
-	action := testing.NewRootDeleteCollectionActionWithOptions(appliedworksResource, opts, listOpts)
-
-	_, err := c.Fake.Invokes(action, &v1alpha1.AppliedWorkList{})
-	return err
-}
-
-// Patch applies the patch and returns the patched appliedWork.
-func (c *FakeAppliedWorks) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *v1alpha1.AppliedWork, err error) {
-	emptyResult := &v1alpha1.AppliedWork{}
-	obj, err := c.Fake.
-		Invokes(testing.NewRootPatchSubresourceActionWithOptions(appliedworksResource, name, pt, data, opts, subresources...), emptyResult)
-	if obj == nil {
-		return emptyResult, err
-	}
-	return obj.(*v1alpha1.AppliedWork), err
 }

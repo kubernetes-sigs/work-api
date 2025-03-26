@@ -29,11 +29,11 @@ type FakeMulticlusterV1alpha1 struct {
 }
 
 func (c *FakeMulticlusterV1alpha1) AppliedWorks() v1alpha1.AppliedWorkInterface {
-	return &FakeAppliedWorks{c}
+	return newFakeAppliedWorks(c)
 }
 
 func (c *FakeMulticlusterV1alpha1) Works(namespace string) v1alpha1.WorkInterface {
-	return &FakeWorks{c, namespace}
+	return newFakeWorks(c, namespace)
 }
 
 // RESTClient returns a RESTClient that is used to communicate
