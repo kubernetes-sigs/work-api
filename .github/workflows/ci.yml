@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: 1.23.7
       - name: golangci-lint
@@ -36,7 +36,7 @@ jobs:
           fetch-depth: 1
           path: go/src/sigs.k8s.io/work-api
       - name: install Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: 1.23.7
       - name: verify
@@ -54,7 +54,7 @@ jobs:
           fetch-depth: 1
           path: go/src/sigs.k8s.io/work-api
       - name: install Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: 1.23.7
       - name: make test
@@ -71,7 +71,7 @@ jobs:
           fetch-depth: 1
           path: go/src/sigs.k8s.io/work-api
       - name: install Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: 1.23.7
       - name: images
