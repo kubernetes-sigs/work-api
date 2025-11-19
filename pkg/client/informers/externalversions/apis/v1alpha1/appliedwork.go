@@ -61,13 +61,25 @@ func NewFilteredAppliedWorkInformer(client versioned.Interface, resyncPeriod tim
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.MulticlusterV1alpha1().AppliedWorks().List(context.TODO(), options)
+				return client.MulticlusterV1alpha1().AppliedWorks().List(context.Background(), options)
 			},
 			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.MulticlusterV1alpha1().AppliedWorks().Watch(context.TODO(), options)
+				return client.MulticlusterV1alpha1().AppliedWorks().Watch(context.Background(), options)
+			},
+			ListWithContextFunc: func(ctx context.Context, options v1.ListOptions) (runtime.Object, error) {
+				if tweakListOptions != nil {
+					tweakListOptions(&options)
+				}
+				return client.MulticlusterV1alpha1().AppliedWorks().List(ctx, options)
+			},
+			WatchFuncWithContext: func(ctx context.Context, options v1.ListOptions) (watch.Interface, error) {
+				if tweakListOptions != nil {
+					tweakListOptions(&options)
+				}
+				return client.MulticlusterV1alpha1().AppliedWorks().Watch(ctx, options)
 			},
 		},
 		&pkgapisv1alpha1.AppliedWork{},
