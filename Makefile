@@ -16,15 +16,16 @@ DOCKER ?= docker
 
 GOHOSTOS ?=$(shell go env GOHOSTOS)
 GOHOSTARCH ?=$(shell go env GOHOSTARCH)
-K8S_VERSION ?=1.19.2
-KB_TOOLS_ARCHIVE_NAME :=kubebuilder-tools-$(K8S_VERSION)-$(GOHOSTOS)-$(GOHOSTARCH).tar.gz
-KB_TOOLS_ARCHIVE_PATH := /tmp/$(KB_TOOLS_ARCHIVE_NAME)
-export KUBEBUILDER_ASSETS ?=/tmp/kubebuilder/bin
+K8S_VERSION ?=1.34.0
 
 HUB_KUBECONFIG ?=$(KUBECONFIG)
 HUB_KUBECONFIG_CONTEXT ?=$(shell kubectl --kubeconfig $(HUB_KUBECONFIG) config current-context)
 SPOKE_KUBECONFIG ?=$(KUBECONFIG)
 SPOKE_KUBECONFIG_CONTEXT ?=$(shell kubectl --kubeconfig $(SPOKE_KUBECONFIG) config current-context)
+
+GO_BIN_DIR := $(shell if [ -n "$$(go env GOBIN)" ]; then echo "$$(go env GOBIN)"; else echo "$$(go env GOPATH)/bin"; fi)
+SETUP_ENVTEST := $(GO_BIN_DIR)/setup-envtest
+export KUBEBUILDER_ASSETS ?=/tmp/kubebuilder/bin
 
 # TOP is the current directory where this Makefile lives.
 TOP := $(dir $(firstword $(MAKEFILE_LIST)))
@@ -67,7 +68,7 @@ manifests:
 
 # Run tests
 .PHONY: test
-test: generate fmt vet manifests ensure-kubebuilder-tools
+test: generate fmt vet manifests setup-envtest
 	go test ./pkg/... -coverprofile cover.out
 
 # Run static analysis.
@@ -110,13 +111,25 @@ test-e2e: build-e2e e2e-hub-kubeconfig-secret deploy
 	./e2e.test -test.v -ginkgo.v
 
 # download the kubebuilder-tools to get kube-apiserver binaries from it
-.PHONY: ensure-kubebuilder-tools
-ensure-kubebuilder-tools:
+.PHONY: setup-envtest
+setup-envtest:
 ifeq "" "$(wildcard $(KUBEBUILDER_ASSETS))"
 	$(info Downloading kube-apiserver into '$(KUBEBUILDER_ASSETS)')
 	mkdir -p '$(KUBEBUILDER_ASSETS)'
-	curl -s -f -L https://storage.googleapis.com/kubebuilder-tools/$(KB_TOOLS_ARCHIVE_NAME) -o '$(KB_TOOLS_ARCHIVE_PATH)'
-	tar -C '$(KUBEBUILDER_ASSETS)' --strip-components=2 -zvxf '$(KB_TOOLS_ARCHIVE_PATH)'
+ifeq "" "$(wildcard $(SETUP_ENVTEST))"
+	$(info Installing setup-envtest into '$(SETUP_ENVTEST)')
+	go install sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.22
+endif
+	ENVTEST_K8S_PATH=$$($(SETUP_ENVTEST) use $(K8S_VERSION) --bin-dir $(KUBEBUILDER_ASSETS) -p path); \
+	if [ -z "$$ENVTEST_K8S_PATH" ]; then \
+		echo "Error: setup-envtest returned empty path"; \
+		exit 1; \
+	fi; \
+	if [ ! -d "$$ENVTEST_K8S_PATH" ]; then \
+		echo "Error: setup-envtest path does not exist: $$ENVTEST_K8S_PATH"; \
+		exit 1; \
+	fi; \
+	cp -r $$ENVTEST_K8S_PATH/* $(KUBEBUILDER_ASSETS)/
 else
 	$(info Using existing kube-apiserver from "$(KUBEBUILDER_ASSETS)")
 endif
