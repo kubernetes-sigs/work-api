@@ -17,7 +17,7 @@ limitations under the License.
 package controllers
 
 import (
-	"fmt"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -43,6 +43,7 @@ var (
 	workClient workclient.Interface
 	testEnv    *envtest.Environment
 	setupLog   = ctrl.Log.WithName("test")
+	cancelFunc context.CancelFunc
 )
 
 func TestAPIs(t *testing.T) {
@@ -76,13 +77,14 @@ var _ = BeforeSuite(func(done Done) {
 	workClient, err = workclient.NewForConfig(cfg)
 	Expect(err).NotTo(HaveOccurred())
 
+	var ctx context.Context
+	ctx, cancelFunc = context.WithCancel(context.Background())
 	go func() {
-		if err := Start(ctrl.SetupSignalHandler(), cfg, cfg, setupLog, opts); err != nil {
+		GinkgoRecover()
+		if err := Start(ctx, cfg, cfg, setupLog, opts); err != nil {
 			setupLog.Error(err, "problem running controllers")
 			os.Exit(1)
 		}
-		fmt.Printf("failed to start manager, %v\n", err)
-		Expect(err).ToNot(HaveOccurred())
 	}()
 
 	close(done)
@@ -90,6 +92,9 @@ var _ = BeforeSuite(func(done Done) {
 
 var _ = AfterSuite(func() {
 	By("tearing down the test environment")
+	if cancelFunc != nil {
+		cancelFunc()
+	}
 	err := testEnv.Stop()
 	Expect(err).ToNot(HaveOccurred())
 })
