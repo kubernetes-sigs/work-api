@@ -5,3 +5,6 @@ approvers:
   - pmorie
   - qiujian16
   - RainbowMango
+
+labels:
+  - sig/multicluster
