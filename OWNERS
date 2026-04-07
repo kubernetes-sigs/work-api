@@ -2,10 +2,12 @@
 
 approvers:
   - jeremyot
-  - pmorie
   - qiujian16
   - skitt
   - RainbowMango
+
+emeritus_approvers:
+  - pmorie
 
 labels:
   - sig/multicluster
