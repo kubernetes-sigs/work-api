@@ -13,12 +13,13 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.25.8
+          cache-dependency-path: go.sum
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           # the version of golangci-lint.
           version: v2.8.0
@@ -31,14 +32,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           path: go/src/sigs.k8s.io/work-api
       - name: install Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.25.8
+          cache-dependency-path: go/src/sigs.k8s.io/work-api/go.sum
       - name: verify
         run: hack/verify-all.sh -v
         env:
@@ -49,14 +51,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           path: go/src/sigs.k8s.io/work-api
       - name: install Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.25.8
+          cache-dependency-path: go/src/sigs.k8s.io/work-api/go.sum
       - name: make test
         run: make test
         env:
@@ -66,22 +69,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           path: go/src/sigs.k8s.io/work-api
       - name: install Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.25.8
+          cache-dependency-path: go/src/sigs.k8s.io/work-api/go.sum
       - name: images
         run: make docker-build
         env:
           GOPATH: '/home/runner/work/work-api/work-api/go'
       - name: setup kind
-        uses: engineerd/setup-kind@v0.6.2
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
-          version: v0.11.1
+          version: v0.32.0
+          node_image: kindest/node:v1.35.5@sha256:ce977ae6d65918d0b58a5f8b5e940429c2ce42fa3a5619ec2bbc60b949c0ac95
+          cluster_name: kind
+          wait: 300s
+          kubectl_version: v1.35.0
       - name: Load image on the nodes of the cluster
         run: |
           kind load docker-image --name=kind work-api-controller:latest
