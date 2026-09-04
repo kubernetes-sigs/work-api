@@ -37,7 +37,7 @@ var _ = Describe("Work Controller", func() {
 	const timeout = time.Second * 30
 	const interval = time.Second * 1
 
-	BeforeEach(func() {
+	BeforeEach(func(ctx context.Context) {
 		workNamespace = "work-" + utilrand.String(5)
 		// Create namespace
 		ns := &corev1.Namespace{
@@ -45,17 +45,17 @@ var _ = Describe("Work Controller", func() {
 				Name: workNamespace,
 			},
 		}
-		_, err := k8sClient.CoreV1().Namespaces().Create(context.Background(), ns, metav1.CreateOptions{})
+		_, err := k8sClient.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	AfterEach(func() {
+	AfterEach(func(ctx context.Context) {
 		// Add any teardown steps that needs to be executed after each test
-		err := k8sClient.CoreV1().Namespaces().Delete(context.Background(), workNamespace, metav1.DeleteOptions{})
+		err := k8sClient.CoreV1().Namespaces().Delete(ctx, workNamespace, metav1.DeleteOptions{})
 		Expect(err).ToNot(HaveOccurred())
 	})
 	Context("Deploy manifests by work", func() {
-		It("Should have a configmap deployed correctly", func() {
+		It("Should have a configmap deployed correctly", func(ctx context.Context) {
 			cmName := "testcm"
 			cmNamespace := "default"
 			cm := &corev1.ConfigMap{
@@ -88,16 +88,16 @@ var _ = Describe("Work Controller", func() {
 				},
 			}
 
-			_, err := workClient.MulticlusterV1alpha1().Works(workNamespace).Create(context.Background(), work, metav1.CreateOptions{})
+			_, err := workClient.MulticlusterV1alpha1().Works(workNamespace).Create(ctx, work, metav1.CreateOptions{})
 			Expect(err).ToNot(HaveOccurred())
 
 			Eventually(func() error {
-				_, err := k8sClient.CoreV1().ConfigMaps(cmNamespace).Get(context.Background(), cmName, metav1.GetOptions{})
+				_, err := k8sClient.CoreV1().ConfigMaps(cmNamespace).Get(ctx, cmName, metav1.GetOptions{})
 				return err
 			}, timeout, interval).Should(Succeed())
 
 			Eventually(func() error {
-				resultWork, err := workClient.MulticlusterV1alpha1().Works(workNamespace).Get(context.Background(), work.Name, metav1.GetOptions{})
+				resultWork, err := workClient.MulticlusterV1alpha1().Works(workNamespace).Get(ctx, work.Name, metav1.GetOptions{})
 				if err != nil {
 					return err
 				}

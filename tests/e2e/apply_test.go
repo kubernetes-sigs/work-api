@@ -35,7 +35,7 @@ const (
 
 var _ = ginkgo.Describe("Apply Work", func() {
 	ginkgo.Context("Create a service and deployment", func() {
-		ginkgo.It("Should create work successfully", func() {
+		ginkgo.It("Should create work successfully", func(ctx context.Context) {
 			workNamespace = "default"
 
 			manifestFiles := []string{
@@ -68,21 +68,21 @@ var _ = ginkgo.Describe("Apply Work", func() {
 					})
 			}
 
-			_, err := hubWorkClient.MulticlusterV1alpha1().Works(workNamespace).Create(context.Background(), work, metav1.CreateOptions{})
+			_, err := hubWorkClient.MulticlusterV1alpha1().Works(workNamespace).Create(ctx, work, metav1.CreateOptions{})
 			gomega.Expect(err).ToNot(gomega.HaveOccurred())
 
 			gomega.Eventually(func() error {
-				_, err := spokeKubeClient.AppsV1().Deployments("default").Get(context.Background(), "test-nginx", metav1.GetOptions{})
+				_, err := spokeKubeClient.AppsV1().Deployments("default").Get(ctx, "test-nginx", metav1.GetOptions{})
 				if err != nil {
 					return err
 				}
 
-				_, err = spokeKubeClient.CoreV1().Services("default").Get(context.Background(), "test-nginx", metav1.GetOptions{})
+				_, err = spokeKubeClient.CoreV1().Services("default").Get(ctx, "test-nginx", metav1.GetOptions{})
 				return err
 			}, eventuallyTimeout, eventuallyInterval).ShouldNot(gomega.HaveOccurred())
 
 			gomega.Eventually(func() error {
-				work, err := hubWorkClient.MulticlusterV1alpha1().Works(workNamespace).Get(context.Background(), "test-work", metav1.GetOptions{})
+				work, err := hubWorkClient.MulticlusterV1alpha1().Works(workNamespace).Get(ctx, "test-work", metav1.GetOptions{})
 				if err != nil {
 					return err
 				}
