@@ -70,7 +70,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, nil
 	}
 
-	results := r.applyManifests(work.Spec.Workload.Manifests, work.Status.ManifestConditions)
+	results := r.applyManifests(ctx, work.Spec.Workload.Manifests, work.Status.ManifestConditions)
 	errs := []error{}
 
 	// Update manifestCondition based on the results
@@ -110,7 +110,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	return ctrl.Result{}, nil
 }
 
-func (r *ApplyWorkReconciler) applyManifests(manifests []workv1alpha1.Manifest, manifestConditions []workv1alpha1.ManifestCondition) []applyResult {
+func (r *ApplyWorkReconciler) applyManifests(ctx context.Context, manifests []workv1alpha1.Manifest, manifestConditions []workv1alpha1.ManifestCondition) []applyResult {
 	results := []applyResult{}
 
 	for index, manifest := range manifests {
@@ -124,7 +124,7 @@ func (r *ApplyWorkReconciler) applyManifests(manifests []workv1alpha1.Manifest, 
 			var obj *unstructured.Unstructured
 			result.identifier = buildResourceIdentifier(index, required, gvr)
 			observedGeneration := findObservedGenerationOfManifest(result.identifier, manifestConditions)
-			obj, result.updated, result.err = r.applyUnstructrued(gvr, required, observedGeneration)
+			obj, result.updated, result.err = r.applyUnstructrued(ctx, gvr, required, observedGeneration)
 			if obj != nil {
 				result.generation = obj.GetGeneration()
 			}
@@ -149,6 +149,7 @@ func (r *ApplyWorkReconciler) decodeUnstructured(manifest workv1alpha1.Manifest)
 }
 
 func (r *ApplyWorkReconciler) applyUnstructrued(
+	ctx context.Context,
 	gvr schema.GroupVersionResource,
 	required *unstructured.Unstructured,
 	observedGeneration int64) (*unstructured.Unstructured, bool, error) {
@@ -161,10 +162,10 @@ func (r *ApplyWorkReconciler) applyUnstructrued(
 	existing, err := r.spokeDynamicClient.
 		Resource(gvr).
 		Namespace(required.GetNamespace()).
-		Get(context.TODO(), required.GetName(), metav1.GetOptions{})
+		Get(ctx, required.GetName(), metav1.GetOptions{})
 	if errors.IsNotFound(err) {
 		actual, err := r.spokeDynamicClient.Resource(gvr).Namespace(required.GetNamespace()).Create(
-			context.TODO(), required, metav1.CreateOptions{})
+			ctx, required, metav1.CreateOptions{})
 		return actual, true, err
 	}
 	if err != nil {
@@ -175,7 +176,7 @@ func (r *ApplyWorkReconciler) applyUnstructrued(
 	if isManifestModified(observedGeneration, gvr, existing, required) {
 		required.SetResourceVersion(existing.GetResourceVersion())
 		actual, err := r.spokeDynamicClient.Resource(gvr).Namespace(required.GetNamespace()).Update(
-			context.TODO(), required, metav1.UpdateOptions{})
+			ctx, required, metav1.UpdateOptions{})
 		return actual, true, err
 	}
 
