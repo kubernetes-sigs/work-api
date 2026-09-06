@@ -88,7 +88,7 @@ var _ = ginkgo.Describe("Apply Work", func() {
 				}
 
 				if !meta.IsStatusConditionTrue(work.Status.Conditions, "Applied") {
-					return fmt.Errorf("Expect the applied contidion of the work is true")
+					return fmt.Errorf("Expect the applied condition of the work is true")
 				}
 
 				return nil
