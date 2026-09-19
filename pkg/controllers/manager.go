@@ -18,7 +18,6 @@ package controllers
 
 import (
 	"context"
-	"os"
 
 	"github.com/go-logr/logr"
 	"k8s.io/client-go/dynamic"
@@ -37,23 +36,23 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 	mgr, err := ctrl.NewManager(hubCfg, opts)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
-		os.Exit(1)
+		return err
 	}
 
 	spokeDynamicClient, err := dynamic.NewForConfig(spokeCfg)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
-		os.Exit(1)
+		return err
 	}
 	httpClient, err := rest.HTTPClientFor(spokeCfg)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
-		os.Exit(1)
+		return err
 	}
 	restMapper, err := apiutil.NewDynamicRESTMapper(spokeCfg, httpClient)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
-		os.Exit(1)
+		return err
 	}
 
 	if err = (&ApplyWorkReconciler{
